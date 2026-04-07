@@ -74,68 +74,21 @@ jobs:
             Compress-Archive -Path $exePath -DestinationPath $portableZip -CompressionLevel Optimal
           }
 
-      - name: Publish into releases folder
+      - name: Inspect Windows bundle output
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          $repo = "bighard-1/orbitterm-clients"
-          $tag = "${{ steps.meta.outputs.release_tag }}"
-          $releaseDir = "releases/$tag"
-          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
-
-          $msiFiles = Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi" -Filter *.msi -File -ErrorAction SilentlyContinue
-          $exeFiles = Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis" -Filter *.exe -File -ErrorAction SilentlyContinue
-          $zipFiles = Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/portable" -Filter *.zip -File -ErrorAction SilentlyContinue
-          $artifacts = @($msiFiles + $exeFiles + $zipFiles)
-          if ($artifacts.Count -eq 0) {
-            throw "No windows artifact found."
-          }
-
-          $hashMap = @{}
-          foreach ($file in $artifacts) {
-            $dest = Join-Path $releaseDir $file.Name
-            Copy-Item $file.FullName $dest -Force
-            $hash = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLowerInvariant()
-            $hashMap[$file.Name] = $hash
-          }
-
-          $shaLines = @()
-          foreach ($name in ($hashMap.Keys | Sort-Object)) {
-            $shaLines += "$($hashMap[$name])  ./$name"
-          }
-          Set-Content -Path (Join-Path $releaseDir "SHA256SUMS.windows.txt") -Value ($shaLines -join "`n") -Encoding utf8
-
-          $latestPath = "releases/latest.json"
-          if (Test-Path $latestPath) {
-            $latest = Get-Content $latestPath -Raw | ConvertFrom-Json
-          } else {
-            $latest = [PSCustomObject]@{}
-          }
-
-          $primaryMsi = $artifacts | Where-Object { $_.Extension -eq ".msi" } | Select-Object -First 1
-          $primaryExe = $artifacts | Where-Object { $_.Extension -eq ".exe" } | Select-Object -First 1
-          $primaryZip = $artifacts | Where-Object { $_.Extension -eq ".zip" } | Select-Object -First 1
-          $primary = if ($null -ne $primaryMsi) { $primaryMsi.Name } elseif ($null -ne $primaryExe) { $primaryExe.Name } else { $primaryZip.Name }
-
-          $latest | Add-Member -MemberType NoteProperty -Name version -Value $tag -Force
-          $latest | Add-Member -MemberType NoteProperty -Name date -Value (Get-Date -Format "yyyy-MM-dd") -Force
-          $latest | Add-Member -MemberType NoteProperty -Name windowsPackage -Value $primary -Force
-          $latest | Add-Member -MemberType NoteProperty -Name windowsSha256 -Value $hashMap[$primary] -Force
-          $latest | Add-Member -MemberType NoteProperty -Name windowsDownloadUrl -Value "https://raw.githubusercontent.com/$repo/main/releases/$tag/$primary" -Force
-
-          $windowsPackages = [ordered]@{}
-          foreach ($f in $artifacts) {
-            $k = if ($f.Extension -eq ".msi") { "msi" } elseif ($f.Extension -eq ".exe") { "nsis" } elseif ($f.Extension -eq ".zip") { "portable" } else { $f.Extension.TrimStart(".") }
-            $windowsPackages[$k] = [ordered]@{
-              file = $f.Name
-              sha256 = $hashMap[$f.Name]
+          Write-Host "=== Bundle directory tree ==="
+          Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+            if (-not $_.PSIsContainer) {
+              Write-Host $_.FullName
             }
           }
-          $latest | Add-Member -MemberType NoteProperty -Name windowsPackages -Value $windowsPackages -Force
 
-          $json = $latest | ConvertTo-Json -Depth 30
-          Set-Content -Path $latestPath -Value $json -Encoding utf8
-          Set-Content -Path (Join-Path $releaseDir "release-manifest.json") -Value $json -Encoding utf8
+      - name: Publish into releases folder
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+          RELEASE_REPO: ${{ github.repository }}
+        run: node scripts/publish-windows-release.mjs
 
       - name: Commit and push release files
         shell: pwsh
