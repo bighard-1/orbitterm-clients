@@ -1,0 +1,128 @@
+name: Build And Publish Windows Client
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag like v0.1.86 (optional, default reads package.json)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve release tag
+        id: meta
+        shell: pwsh
+        run: |
+          if ("${{ github.event.inputs.release_tag }}" -ne "") {
+            $tag = "${{ github.event.inputs.release_tag }}"
+          } else {
+            $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+            $tag = "v$($pkg.version)"
+          }
+          "release_tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "release_version=$($tag.TrimStart('v'))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Build Windows packages (msi + nsis)
+        shell: pwsh
+        run: |
+          npx tauri build --target x86_64-pc-windows-msvc --bundles msi,nsis
+
+      - name: Publish into releases folder
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $repo = "bighard-1/orbitterm-clients"
+          $tag = "${{ steps.meta.outputs.release_tag }}"
+          $releaseDir = "releases/$tag"
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+
+          $msiFiles = Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi" -Filter *.msi -File -ErrorAction SilentlyContinue
+          $exeFiles = Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis" -Filter *.exe -File -ErrorAction SilentlyContinue
+          $artifacts = @($msiFiles + $exeFiles)
+          if ($artifacts.Count -eq 0) {
+            throw "No windows artifact found."
+          }
+
+          $hashMap = @{}
+          foreach ($file in $artifacts) {
+            $dest = Join-Path $releaseDir $file.Name
+            Copy-Item $file.FullName $dest -Force
+            $hash = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLowerInvariant()
+            $hashMap[$file.Name] = $hash
+          }
+
+          $shaLines = @()
+          foreach ($name in ($hashMap.Keys | Sort-Object)) {
+            $shaLines += "$($hashMap[$name])  ./$name"
+          }
+          Set-Content -Path (Join-Path $releaseDir "SHA256SUMS.windows.txt") -Value ($shaLines -join "`n") -Encoding utf8
+
+          $latestPath = "releases/latest.json"
+          if (Test-Path $latestPath) {
+            $latest = Get-Content $latestPath -Raw | ConvertFrom-Json
+          } else {
+            $latest = [PSCustomObject]@{}
+          }
+
+          $primaryMsi = $artifacts | Where-Object { $_.Extension -eq ".msi" } | Select-Object -First 1
+          $primaryExe = $artifacts | Where-Object { $_.Extension -eq ".exe" } | Select-Object -First 1
+          $primary = if ($null -ne $primaryMsi) { $primaryMsi.Name } else { $primaryExe.Name }
+
+          $latest | Add-Member -MemberType NoteProperty -Name version -Value $tag -Force
+          $latest | Add-Member -MemberType NoteProperty -Name date -Value (Get-Date -Format "yyyy-MM-dd") -Force
+          $latest | Add-Member -MemberType NoteProperty -Name windowsPackage -Value $primary -Force
+          $latest | Add-Member -MemberType NoteProperty -Name windowsSha256 -Value $hashMap[$primary] -Force
+          $latest | Add-Member -MemberType NoteProperty -Name windowsDownloadUrl -Value "https://raw.githubusercontent.com/$repo/main/releases/$tag/$primary" -Force
+
+          $windowsPackages = [ordered]@{}
+          foreach ($f in $artifacts) {
+            $k = if ($f.Extension -eq ".msi") { "msi" } elseif ($f.Extension -eq ".exe") { "nsis" } else { $f.Extension.TrimStart(".") }
+            $windowsPackages[$k] = [ordered]@{
+              file = $f.Name
+              sha256 = $hashMap[$f.Name]
+            }
+          }
+          $latest | Add-Member -MemberType NoteProperty -Name windowsPackages -Value $windowsPackages -Force
+
+          $json = $latest | ConvertTo-Json -Depth 30
+          Set-Content -Path $latestPath -Value $json -Encoding utf8
+          Set-Content -Path (Join-Path $releaseDir "release-manifest.json") -Value $json -Encoding utf8
+
+      - name: Commit and push release files
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add releases/latest.json releases/${{ steps.meta.outputs.release_tag }}
+          if (git diff --cached --quiet) {
+            Write-Host "No changes to commit."
+            exit 0
+          }
+          git commit -m "release(windows): publish ${{ steps.meta.outputs.release_tag }} from actions"
+          git push
+
