@@ -55,7 +55,8 @@ jobs:
       - name: Build Windows package (nsis only)
         shell: pwsh
         run: |
-          npx tauri build --target x86_64-pc-windows-msvc --bundles nsis
+          node scripts/disable-tauri-updater.mjs src-tauri/tauri.conf.json tauri.windows.local.conf.json
+          npx tauri build --config tauri.windows.local.conf.json --target x86_64-pc-windows-msvc --bundles nsis
 
       - name: Publish into releases folder
         shell: pwsh
