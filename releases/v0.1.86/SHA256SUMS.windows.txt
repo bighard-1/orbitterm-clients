@@ -1,1 +1,2 @@
-f25bba98996fcd56e33fdc0f8dd5cc4d6fec23432bac553d82f38407639c517c  ./OrbitTerm_0.1.86_x64-setup.exe
+ecb2c2b0be433b54e4c911c7141d9918e5e0491938c2a979b7272625fdabc63b  ./OrbitTerm_0.1.86_x64-setup.exe
+0066ab8fd6cb6ee067d4608b5f298e2b96029001f0ec6f4c6d353b69d0c8416f  ./OrbitTerm_0.1.86_x64_en-US.msi
