@@ -52,62 +52,10 @@ jobs:
           "release_tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "release_version=$($tag.TrimStart('v'))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Build Windows packages with fallback
+      - name: Build Windows package (nsis only)
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Continue"
-          $ok = $false
-          $timeoutSec = 1800
-
-          function Invoke-TauriBuildWithTimeout {
-            param(
-              [string[]]$Args,
-              [int]$TimeoutSeconds
-            )
-            $argString = ($Args -join " ")
-            Write-Host "Run: npx $argString (timeout ${TimeoutSeconds}s)"
-            $proc = Start-Process -FilePath "npx.cmd" -ArgumentList $Args -NoNewWindow -PassThru
-            $finished = $proc.WaitForExit($TimeoutSeconds * 1000)
-            if (-not $finished) {
-              Write-Host "[WARN] Build timed out, killing process tree..."
-              try {
-                taskkill /PID $proc.Id /T /F | Out-Null
-              } catch {
-                Write-Host "[WARN] taskkill failed: $($_.Exception.Message)"
-              }
-              return 124
-            }
-            return $proc.ExitCode
-          }
-
-          Write-Host "Try #1: msi + nsis"
-          $code = Invoke-TauriBuildWithTimeout @("tauri","build","--target","x86_64-pc-windows-msvc","--bundles","msi,nsis") $timeoutSec
-          if ($code -eq 0) {
-            $ok = $true
-            Write-Host "Build success with msi + nsis"
-          }
-
-          if (-not $ok) {
-            Write-Host "Try #2: nsis only"
-            $code = Invoke-TauriBuildWithTimeout @("tauri","build","--target","x86_64-pc-windows-msvc","--bundles","nsis") $timeoutSec
-            if ($code -eq 0) {
-              $ok = $true
-              Write-Host "Build success with nsis only"
-            }
-          }
-
-          if (-not $ok) {
-            Write-Host "Try #3: msi only"
-            $code = Invoke-TauriBuildWithTimeout @("tauri","build","--target","x86_64-pc-windows-msvc","--bundles","msi") $timeoutSec
-            if ($code -eq 0) {
-              $ok = $true
-              Write-Host "Build success with msi only"
-            }
-          }
-
-          if (-not $ok) {
-            throw "All Windows build attempts failed."
-          }
+          npx tauri build --target x86_64-pc-windows-msvc --bundles nsis
 
       - name: Publish into releases folder
         shell: pwsh
