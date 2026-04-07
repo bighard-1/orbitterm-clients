@@ -57,6 +57,22 @@ jobs:
         run: |
           node scripts/disable-tauri-updater.mjs src-tauri/tauri.conf.json tauri.windows.local.conf.json
           npx tauri build --config tauri.windows.local.conf.json --target x86_64-pc-windows-msvc --bundles nsis
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "[WARN] NSIS build failed, fallback to portable build..."
+            npx tauri build --config tauri.windows.local.conf.json --target x86_64-pc-windows-msvc --no-bundle
+            if ($LASTEXITCODE -ne 0) {
+              throw "Portable fallback build failed."
+            }
+            $exePath = "src-tauri/target/x86_64-pc-windows-msvc/release/OrbitTerm.exe"
+            if (-not (Test-Path $exePath)) {
+              throw "Portable exe not found at $exePath"
+            }
+            $portableDir = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/portable"
+            New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+            $portableZip = Join-Path $portableDir "OrbitTerm_${{ steps.meta.outputs.release_version }}_x64_portable.zip"
+            if (Test-Path $portableZip) { Remove-Item $portableZip -Force }
+            Compress-Archive -Path $exePath -DestinationPath $portableZip -CompressionLevel Optimal
+          }
 
       - name: Publish into releases folder
         shell: pwsh
@@ -69,7 +85,8 @@ jobs:
 
           $msiFiles = Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi" -Filter *.msi -File -ErrorAction SilentlyContinue
           $exeFiles = Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis" -Filter *.exe -File -ErrorAction SilentlyContinue
-          $artifacts = @($msiFiles + $exeFiles)
+          $zipFiles = Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/portable" -Filter *.zip -File -ErrorAction SilentlyContinue
+          $artifacts = @($msiFiles + $exeFiles + $zipFiles)
           if ($artifacts.Count -eq 0) {
             throw "No windows artifact found."
           }
@@ -97,7 +114,8 @@ jobs:
 
           $primaryMsi = $artifacts | Where-Object { $_.Extension -eq ".msi" } | Select-Object -First 1
           $primaryExe = $artifacts | Where-Object { $_.Extension -eq ".exe" } | Select-Object -First 1
-          $primary = if ($null -ne $primaryMsi) { $primaryMsi.Name } else { $primaryExe.Name }
+          $primaryZip = $artifacts | Where-Object { $_.Extension -eq ".zip" } | Select-Object -First 1
+          $primary = if ($null -ne $primaryMsi) { $primaryMsi.Name } elseif ($null -ne $primaryExe) { $primaryExe.Name } else { $primaryZip.Name }
 
           $latest | Add-Member -MemberType NoteProperty -Name version -Value $tag -Force
           $latest | Add-Member -MemberType NoteProperty -Name date -Value (Get-Date -Format "yyyy-MM-dd") -Force
@@ -107,7 +125,7 @@ jobs:
 
           $windowsPackages = [ordered]@{}
           foreach ($f in $artifacts) {
-            $k = if ($f.Extension -eq ".msi") { "msi" } elseif ($f.Extension -eq ".exe") { "nsis" } else { $f.Extension.TrimStart(".") }
+            $k = if ($f.Extension -eq ".msi") { "msi" } elseif ($f.Extension -eq ".exe") { "nsis" } elseif ($f.Extension -eq ".zip") { "portable" } else { $f.Extension.TrimStart(".") }
             $windowsPackages[$k] = [ordered]@{
               file = $f.Name
               sha256 = $hashMap[$f.Name]
