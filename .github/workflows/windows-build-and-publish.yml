@@ -21,6 +21,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Setup Node.js 24
@@ -101,4 +102,4 @@ jobs:
             exit 0
           }
           git commit -m "release(windows): publish ${{ steps.meta.outputs.release_tag }} from actions"
-          git push
+          git push origin HEAD:main
