@@ -1,9 +1,8 @@
 {
   "version": "v0.1.86",
   "date": "2026-04-07",
-  "windowsPackage": "OrbitTerm_0.1.83_x64_en-US.msi",
-  "windowsSha256": "c2ec6f30c425789a9ba2b8fcfc9aff337ff8e87eb5ca2b6a169d1ddb06203f40",
-  "windowsDownloadUrl": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v0.1.83/OrbitTerm_0.1.83_x64_en-US.msi",
+  "windowsPackage": "OrbitTerm_0.1.86_x64-setup.exe",
+  "windowsDownloadUrl": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v0.1.86/OrbitTerm_0.1.86_x64-setup.exe",
   "macPackage": "OrbitTerm_0.1.86_aarch64.dmg",
   "macPackageX64": "OrbitTerm_0.1.86_x64.dmg",
   "macSha256": "60dcf77dbbba141dc9d8d6ce20a8a7f9662d792d8e3fbb1451b0a5788017fead",
@@ -50,5 +49,12 @@
       "file": "OrbitTerm_0.1.86_android-x86_64.apk",
       "sha256": "11b11814808fd3fe7dab1d079c970c88411682f051f9c4317776aacfa68f795b"
     }
-  }
+  },
+  "windowsPackages": {
+    "nsis": {
+      "file": "OrbitTerm_0.1.86_x64-setup.exe",
+      "sha256": "f25bba98996fcd56e33fdc0f8dd5cc4d6fec23432bac553d82f38407639c517c"
+    }
+  },
+  "windowsSha256": "f25bba98996fcd56e33fdc0f8dd5cc4d6fec23432bac553d82f38407639c517c"
 }
