@@ -53,8 +53,18 @@ jobs:
           tag_name: ${{ steps.meta.outputs.version }}
           target_commitish: main
           generate_release_notes: true
+          fail_on_unmatched_files: false
           files: |
             ${{ steps.meta.outputs.dir }}/OrbitTerm_*_x64-setup.exe
             ${{ steps.meta.outputs.dir }}/OrbitTerm_*_x64_en-US.msi
+            ${{ steps.meta.outputs.dir }}/OrbitTerm_*_aarch64.dmg
+            ${{ steps.meta.outputs.dir }}/OrbitTerm_*_x64.dmg
+            ${{ steps.meta.outputs.dir }}/OrbitTerm_*_amd64.deb
+            ${{ steps.meta.outputs.dir }}/OrbitTerm-*.rpm
+            ${{ steps.meta.outputs.dir }}/OrbitTerm_*_android-universal.apk
+            ${{ steps.meta.outputs.dir }}/OrbitTerm_*_android-arm64.apk
+            ${{ steps.meta.outputs.dir }}/OrbitTerm_*_android-x86_64.apk
+            ${{ steps.meta.outputs.dir }}/SHA256SUMS.txt
             ${{ steps.meta.outputs.dir }}/SHA256SUMS.windows.txt
+            ${{ steps.meta.outputs.dir }}/SHA256SUMS.android.txt
             ${{ steps.meta.outputs.dir }}/release-manifest.json
