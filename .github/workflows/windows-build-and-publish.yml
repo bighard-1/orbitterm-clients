@@ -52,10 +52,40 @@ jobs:
           "release_tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "release_version=$($tag.TrimStart('v'))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Build Windows packages (msi + nsis)
+      - name: Build Windows packages with fallback
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Continue"
+          $ok = $false
+
+          Write-Host "Try #1: msi + nsis"
           npx tauri build --target x86_64-pc-windows-msvc --bundles msi,nsis
+          if ($LASTEXITCODE -eq 0) {
+            $ok = $true
+            Write-Host "Build success with msi + nsis"
+          }
+
+          if (-not $ok) {
+            Write-Host "Try #2: nsis only"
+            npx tauri build --target x86_64-pc-windows-msvc --bundles nsis
+            if ($LASTEXITCODE -eq 0) {
+              $ok = $true
+              Write-Host "Build success with nsis only"
+            }
+          }
+
+          if (-not $ok) {
+            Write-Host "Try #3: msi only"
+            npx tauri build --target x86_64-pc-windows-msvc --bundles msi
+            if ($LASTEXITCODE -eq 0) {
+              $ok = $true
+              Write-Host "Build success with msi only"
+            }
+          }
+
+          if (-not $ok) {
+            throw "All Windows build attempts failed."
+          }
 
       - name: Publish into releases folder
         shell: pwsh
