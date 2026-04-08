@@ -92,6 +92,9 @@ if (-not $SkipBuild) {
 
 $bundleRoot = Join-Path $root "src-tauri\target\x86_64-pc-windows-msvc\release\bundle"
 if (-not (Test-Path $bundleRoot)) {
+  $bundleRoot = Join-Path $root "src-tauri\target\release\bundle"
+}
+if (-not (Test-Path $bundleRoot)) {
   throw "Bundle directory not found: $bundleRoot"
 }
 
