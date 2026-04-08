@@ -49,9 +49,20 @@ if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {
   $ReleaseTag = "v$packageVersion"
 }
 
+$disableUpdaterScript = Join-Path $root "scripts\disable-tauri-updater.mjs"
+$srcTauriConfigPath = Join-Path $root "src-tauri\tauri.conf.json"
+$tmpTauriConfigPath = Join-Path $env:TEMP "orbitterm-tauri.conf.windows.no-updater.json"
+
 Write-Step "Project root: $root"
 Write-Step "Client repo: $ClientRepoPath"
 Write-Step "Release tag: $ReleaseTag"
+
+if (Test-Path $disableUpdaterScript) {
+  Write-Step "Prepare temporary tauri config (updater artifacts disabled for local Windows build)"
+  node $disableUpdaterScript $srcTauriConfigPath $tmpTauriConfigPath
+  if ($LASTEXITCODE -ne 0) { throw "Failed to prepare updater-disabled tauri config." }
+  $env:TAURI_CONFIG = $tmpTauriConfigPath
+}
 
 if (-not $SkipBuild) {
   Write-Step "Install node dependencies"
@@ -192,6 +203,13 @@ if ($Push) {
     if ($LASTEXITCODE -ne 0) { throw "git push failed (main repo)." }
   }
   Pop-Location
+}
+
+if (Test-Path $tmpTauriConfigPath) {
+  Remove-Item -Path $tmpTauriConfigPath -Force -ErrorAction SilentlyContinue
+}
+if ($env:TAURI_CONFIG) {
+  Remove-Item Env:TAURI_CONFIG -ErrorAction SilentlyContinue
 }
 
 Write-Step "Done"
