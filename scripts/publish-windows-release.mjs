@@ -2,9 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
+function stripBom(raw) {
+  return raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+}
+
 function readJsonIfExists(filePath, fallback = {}) {
   if (!fs.existsSync(filePath)) return fallback;
-  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  const raw = stripBom(fs.readFileSync(filePath, 'utf8'));
+  return JSON.parse(raw);
 }
 
 function ensureDir(dirPath) {

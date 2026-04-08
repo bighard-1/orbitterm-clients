@@ -26,6 +26,15 @@ function Invoke-Build {
   return $LASTEXITCODE
 }
 
+function Write-Utf8NoBom {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Content
+  )
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
 if ($env:OS -ne "Windows_NT") {
   throw "This script must run on Windows host / Windows VM."
 }
@@ -147,7 +156,7 @@ $shaLines = @()
 foreach ($name in ($hashTable.Keys | Sort-Object)) {
   $shaLines += "$($hashTable[$name])  ./$name"
 }
-Set-Content -Path $shaOut -Value ($shaLines -join "`n") -Encoding utf8
+Write-Utf8NoBom -Path $shaOut -Content ($shaLines -join "`n")
 
 $latest = Get-Content $latestJsonPath -Raw | ConvertFrom-Json
 $primaryMsi = $artifactFiles | Where-Object { $_.Extension -eq ".msi" } | Select-Object -First 1
@@ -172,12 +181,12 @@ $latest | Add-Member -MemberType NoteProperty -Name windowsPackages -Value $wind
 
 $manifestPath = Join-Path $releaseDir "release-manifest.json"
 $latestJson = $latest | ConvertTo-Json -Depth 30
-Set-Content -Path $latestJsonPath -Value $latestJson -Encoding utf8
-Set-Content -Path $manifestPath -Value $latestJson -Encoding utf8
+Write-Utf8NoBom -Path $latestJsonPath -Content $latestJson
+Write-Utf8NoBom -Path $manifestPath -Content $latestJson
 
 $websiteMetaPath = Join-Path $root "website\public\release-meta.json"
 if (Test-Path $websiteMetaPath) {
-  Set-Content -Path $websiteMetaPath -Value $latestJson -Encoding utf8
+  Write-Utf8NoBom -Path $websiteMetaPath -Content $latestJson
 }
 
 Write-Step "Published release metadata"
