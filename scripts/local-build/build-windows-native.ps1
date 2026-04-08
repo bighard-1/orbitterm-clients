@@ -52,7 +52,7 @@ if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {
 $disableUpdaterScript = Join-Path $root "scripts\disable-tauri-updater.mjs"
 $srcTauriConfigPath = Join-Path $root "src-tauri\tauri.conf.json"
 $tmpTauriConfigPath = Join-Path $env:TEMP "orbitterm-tauri.conf.windows.no-updater.json"
-$tauriBuildConfigArgs = @()
+$backupTauriConfigPath = Join-Path $env:TEMP "orbitterm-tauri.conf.windows.backup.json"
 
 Write-Step "Project root: $root"
 Write-Step "Client repo: $ClientRepoPath"
@@ -62,7 +62,8 @@ if (Test-Path $disableUpdaterScript) {
   Write-Step "Prepare temporary tauri config (updater artifacts disabled for local Windows build)"
   node $disableUpdaterScript $srcTauriConfigPath $tmpTauriConfigPath
   if ($LASTEXITCODE -ne 0) { throw "Failed to prepare updater-disabled tauri config." }
-  $tauriBuildConfigArgs = @("--config", $tmpTauriConfigPath)
+  Copy-Item -Path $srcTauriConfigPath -Destination $backupTauriConfigPath -Force
+  Copy-Item -Path $tmpTauriConfigPath -Destination $srcTauriConfigPath -Force
 }
 
 if (-not $SkipBuild) {
@@ -75,14 +76,14 @@ if (-not $SkipBuild) {
   if ($LASTEXITCODE -ne 0) { throw "rustup target add failed." }
 
   Write-Step "Build Windows bundles (msi, nsis)"
-  $code = Invoke-Build ($tauriBuildConfigArgs + @("--target", "x86_64-pc-windows-msvc", "--bundles", "msi,nsis"))
+  $code = Invoke-Build @("--target", "x86_64-pc-windows-msvc", "--bundles", "msi,nsis")
   if ($code -ne 0) {
     Write-Host "[WARN] msi+nsis failed, fallback to msi only..." -ForegroundColor Yellow
-    $code = Invoke-Build ($tauriBuildConfigArgs + @("--target", "x86_64-pc-windows-msvc", "--bundles", "msi"))
+    $code = Invoke-Build @("--target", "x86_64-pc-windows-msvc", "--bundles", "msi")
   }
   if ($code -ne 0) {
     Write-Host "[WARN] msi failed, fallback to nsis only..." -ForegroundColor Yellow
-    $code = Invoke-Build ($tauriBuildConfigArgs + @("--target", "x86_64-pc-windows-msvc", "--bundles", "nsis"))
+    $code = Invoke-Build @("--target", "x86_64-pc-windows-msvc", "--bundles", "nsis")
   }
   if ($code -ne 0) {
     throw "Windows bundle build failed."
@@ -208,6 +209,10 @@ if ($Push) {
 
 if (Test-Path $tmpTauriConfigPath) {
   Remove-Item -Path $tmpTauriConfigPath -Force -ErrorAction SilentlyContinue
+}
+if (Test-Path $backupTauriConfigPath) {
+  Copy-Item -Path $backupTauriConfigPath -Destination $srcTauriConfigPath -Force
+  Remove-Item -Path $backupTauriConfigPath -Force -ErrorAction SilentlyContinue
 }
 
 Write-Step "Done"
