@@ -3,22 +3,28 @@ import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import type { HostConfig, IdentityConfig } from '../types/host';
+import { detectMobileFormFactor, isAndroidRuntime } from '../services/runtime';
 import { hostPattern } from '../schemas/hostSchemas';
 
 const editHostSchema = z
   .object({
+    protocol: z.enum(['ssh', 'telnet', 'serial']).default('ssh'),
     name: z.string().max(50, '主机名称不能超过 50 个字符').default(''),
-    address: z
-      .string()
-      .min(2, '请输入有效的主机地址')
-      .max(255, '主机地址过长')
-      .refine((value) => hostPattern.test(value), '请输入合法的域名、IPv4 或 [IPv6] 地址'),
+    group: z.string().max(40, '分组名称不能超过 40 个字符').default(''),
+    address: z.string().max(255, '主机地址过长').default(''),
     port: z.coerce.number().int('端口必须是整数').min(1, '端口最小为 1').max(65535, '端口最大为 65535'),
+    serialPath: z.string().max(255, '串口设备路径过长').default(''),
+    serialBaudRate: z.coerce
+      .number()
+      .int('波特率必须是整数')
+      .min(300, '波特率最小为 300')
+      .max(4000000, '波特率过大，请检查')
+      .default(115200),
     description: z.string().max(160, '备注不能超过 160 个字符').default(''),
     tagsText: z.string().max(120, '标签总长度不能超过 120 个字符').default(''),
     identityName: z.string().max(50, '身份名称不能超过 50 个字符').default(''),
     identityUsername: z.string().min(1, '请输入登录用户名').max(64, '用户名不能超过 64 个字符'),
-    method: z.enum(['password', 'privateKey'], {
+    method: z.enum(['none', 'password', 'privateKey'], {
       required_error: '请选择认证方式'
     }),
     password: z.string().optional(),
@@ -26,7 +32,32 @@ const editHostSchema = z
     passphrase: z.string().optional()
   })
   .superRefine((data, ctx) => {
-    if (data.method === 'password') {
+    if (data.protocol === 'serial') {
+      if (data.serialPath.trim().length < 1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['serialPath'],
+          message: '请输入串口设备路径，例如 COM3 或 /dev/ttyUSB0'
+        });
+      }
+    } else {
+      const normalizedAddress = data.address.trim();
+      if (normalizedAddress.length < 2) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['address'],
+          message: '请输入有效的主机地址'
+        });
+      } else if (!hostPattern.test(normalizedAddress)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['address'],
+          message: '请输入合法的域名、IPv4 或 [IPv6] 地址'
+        });
+      }
+    }
+
+    if (data.protocol !== 'serial' && data.method === 'password') {
       const pwd = data.password?.trim() ?? '';
       if (pwd.length < 1) {
         ctx.addIssue({
@@ -37,7 +68,7 @@ const editHostSchema = z
       }
     }
 
-    if (data.method === 'privateKey') {
+    if (data.protocol === 'ssh' && data.method === 'privateKey') {
       const key = data.privateKey?.trim() ?? '';
       if (key.length < 20) {
         ctx.addIssue({
@@ -84,8 +115,12 @@ export function HostEditDialog({
     mode: 'onBlur',
     defaultValues: {
       name: '',
+      group: '',
+      protocol: 'ssh',
       address: '',
       port: 22,
+      serialPath: '',
+      serialBaudRate: 115200,
       description: '',
       tagsText: '',
       identityName: '',
@@ -104,8 +139,12 @@ export function HostEditDialog({
 
     reset({
       name: host.basicInfo.name,
+      group: host.basicInfo.group ?? '',
+      protocol: host.basicInfo.protocol ?? 'ssh',
       address: host.basicInfo.address,
       port: host.basicInfo.port,
+      serialPath: host.basicInfo.serialPath ?? '',
+      serialBaudRate: host.basicInfo.serialBaudRate ?? 115200,
       description: host.basicInfo.description,
       tagsText: host.advancedOptions.tags.join(','),
       identityName: identity.name,
@@ -118,6 +157,8 @@ export function HostEditDialog({
   }, [open, host, identity, reset]);
 
   const method = watch('method');
+  const protocol = watch('protocol');
+  const isMobileRuntime = detectMobileFormFactor() || isAndroidRuntime();
 
   if (!open || !host || !identity) {
     return null;
@@ -147,10 +188,35 @@ export function HostEditDialog({
         <form
           className="mt-5 space-y-5"
           onSubmit={handleSubmit((values) => {
+            if (values.protocol === 'serial') {
+              values.method = 'none';
+              values.address = 'serial.local';
+              values.port = 1;
+              values.password = '';
+              values.privateKey = '';
+              values.passphrase = '';
+            } else if (values.protocol === 'telnet') {
+              values.method = 'password';
+              values.privateKey = '';
+              values.passphrase = '';
+            }
             void onSubmit(values);
           })}
         >
           <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">连接协议</label>
+              <select className={inputClassName} {...register('protocol')}>
+                <option value="ssh">SSH</option>
+                <option value="telnet">Telnet</option>
+                <option disabled={isMobileRuntime} value="serial">
+                  Serial（本地串口）
+                </option>
+              </select>
+              {isMobileRuntime && (
+                <p className="text-[11px] text-amber-300">移动端暂不支持本地串口连接。</p>
+              )}
+            </div>
             <div className="space-y-2">
               <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">主机名称（可选）</label>
               <input className={inputClassName} placeholder="留空将自动使用 地址:端口" {...register('name')} />
@@ -160,6 +226,11 @@ export function HostEditDialog({
               <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">备注</label>
               <input className={inputClassName} placeholder="例如：生产集群入口" {...register('description')} />
               {errors.description && <p className="text-xs text-rose-300">{errors.description.message}</p>}
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">分组（可选）</label>
+              <input className={inputClassName} placeholder="例如：生产 / 测试 / 香港节点" {...register('group')} />
+              {errors.group && <p className="text-xs text-rose-300">{errors.group.message}</p>}
             </div>
           </div>
 
@@ -175,18 +246,33 @@ export function HostEditDialog({
             {errors.tagsText && <p className="text-xs text-rose-300">{errors.tagsText.message}</p>}
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-[1fr_160px]">
-            <div className="space-y-2">
-              <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">主机地址</label>
-              <input className={inputClassName} placeholder="例如：10.0.0.8" {...register('address')} />
-              {errors.address && <p className="text-xs text-rose-300">{errors.address.message}</p>}
+          {protocol === 'serial' ? (
+            <div className="grid gap-4 sm:grid-cols-[1fr_180px]">
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">串口设备路径</label>
+                <input className={inputClassName} placeholder="例如：COM3 / /dev/ttyUSB0" {...register('serialPath')} />
+                {errors.serialPath && <p className="text-xs text-rose-300">{errors.serialPath.message}</p>}
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">波特率</label>
+                <input className={inputClassName} type="number" {...register('serialBaudRate')} />
+                {errors.serialBaudRate && <p className="text-xs text-rose-300">{errors.serialBaudRate.message}</p>}
+              </div>
             </div>
-            <div className="space-y-2">
-              <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">端口</label>
-              <input className={inputClassName} type="number" {...register('port')} />
-              {errors.port && <p className="text-xs text-rose-300">{errors.port.message}</p>}
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-[1fr_160px]">
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">主机地址</label>
+                <input className={inputClassName} placeholder="例如：10.0.0.8" {...register('address')} />
+                {errors.address && <p className="text-xs text-rose-300">{errors.address.message}</p>}
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">端口</label>
+                <input className={inputClassName} type="number" {...register('port')} />
+                {errors.port && <p className="text-xs text-rose-300">{errors.port.message}</p>}
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
@@ -203,18 +289,29 @@ export function HostEditDialog({
 
           <div className="space-y-3 rounded-2xl border border-[#2a3f5d] bg-[#0d1a2b]/75 p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">认证方式</p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="flex items-center gap-2 rounded-xl border border-[#35547d] bg-[#12233a] p-3 text-sm text-[#d4e5ff]">
-                <input type="radio" value="password" {...register('method')} />
-                密码认证
-              </label>
-              <label className="flex items-center gap-2 rounded-xl border border-[#35547d] bg-[#12233a] p-3 text-sm text-[#d4e5ff]">
-                <input type="radio" value="privateKey" {...register('method')} />
-                私钥认证
-              </label>
-            </div>
+            {protocol === 'serial' ? (
+              <div className="rounded-xl border border-[#35547d] bg-[#12233a] p-3 text-sm text-[#d4e5ff]">
+                Serial 本地连接不使用应用层账号认证。
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="flex items-center gap-2 rounded-xl border border-[#35547d] bg-[#12233a] p-3 text-sm text-[#d4e5ff]">
+                  <input type="radio" value="password" {...register('method')} />
+                  密码认证
+                </label>
+                <label className="flex items-center gap-2 rounded-xl border border-[#35547d] bg-[#12233a] p-3 text-sm text-[#d4e5ff]">
+                  <input
+                    disabled={protocol !== 'ssh'}
+                    type="radio"
+                    value="privateKey"
+                    {...register('method')}
+                  />
+                  私钥认证
+                </label>
+              </div>
+            )}
 
-            {method === 'password' && (
+            {protocol !== 'serial' && method === 'password' && (
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">登录密码</label>
                 <input className={inputClassName} placeholder="请输入登录密码" type="password" {...register('password')} />
@@ -222,7 +319,7 @@ export function HostEditDialog({
               </div>
             )}
 
-            {method === 'privateKey' && (
+            {protocol === 'ssh' && method === 'privateKey' && (
               <div className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">私钥内容</label>

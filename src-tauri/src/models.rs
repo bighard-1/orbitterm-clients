@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AuthMethod {
+    None,
     Password,
     PrivateKey,
 }
@@ -10,6 +11,20 @@ pub enum AuthMethod {
 impl Default for AuthMethod {
     fn default() -> Self {
         Self::Password
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum HostProtocol {
+    Ssh,
+    Telnet,
+    Serial,
+}
+
+impl Default for HostProtocol {
+    fn default() -> Self {
+        Self::Ssh
     }
 }
 
@@ -293,6 +308,12 @@ pub struct HostBasicInfo {
     pub port: u16,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub protocol: HostProtocol,
+    #[serde(default)]
+    pub serial_path: String,
+    #[serde(default = "default_serial_baud_rate")]
+    pub serial_baud_rate: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -350,6 +371,10 @@ fn default_host_address() -> String {
 
 fn default_host_port() -> u16 {
     22
+}
+
+fn default_serial_baud_rate() -> u32 {
+    115_200
 }
 
 fn default_connection_timeout() -> u64 {

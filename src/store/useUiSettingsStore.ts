@@ -135,7 +135,7 @@ export const useUiSettingsStore = create<UiSettingsState>()(
     (set) => ({
       terminalFontSize: 14,
       terminalFontFamily:
-        '"IBM Plex Mono", "Symbols Nerd Font Mono", "Nerd Font Symbols", "JetBrainsMono Nerd Font", "JetBrains Mono", "Source Code Pro", Inconsolata, "Sarasa Mono SC", Menlo, Monaco, monospace',
+        '"JetBrains Mono", "JetBrainsMono Nerd Font", "Symbols Nerd Font Mono", "Nerd Font Symbols", "IBM Plex Mono", "Source Code Pro", Inconsolata, "Sarasa Mono SC", Menlo, Monaco, monospace',
       terminalLineHeight: 1.08,
       terminalOpacity: 92,
       terminalBlur: 8,

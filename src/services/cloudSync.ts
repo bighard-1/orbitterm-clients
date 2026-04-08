@@ -143,6 +143,46 @@ export interface CloudDeviceItem {
   isCurrent: boolean;
 }
 
+export interface CloudSSHKeyItem {
+  id: string;
+  algorithm: string;
+  fingerprint: string;
+  comment: string;
+  status: 'active' | 'expired' | 'revoked' | string;
+  reason?: string;
+  issuedAt?: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  lastDeployedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CloudSSHKeyListResponse {
+  canRotate: boolean;
+  defaultTtlDays: number;
+  overlapDays: number;
+  keys: CloudSSHKeyItem[];
+}
+
+export interface RotateCloudSSHKeyPayload {
+  publicKey: string;
+  comment?: string;
+  reason?: string;
+  ttlDays?: number;
+  overlapDays?: number;
+}
+
+export interface RotateCloudSSHKeyResponse {
+  message: string;
+  keyId: string;
+  fingerprint: string;
+  algorithm: string;
+  issuedAt: string;
+  expiresAt: string;
+  overlapUntil: string;
+}
+
 export interface CloudUser2FAStatus {
   enabled: boolean;
   method: string;
@@ -1460,6 +1500,59 @@ export const logoutAllCloudDevices = async (
     })
   });
   return readJson<LogoutDeviceResponse>(response, '退出所有设备失败，请稍后重试。');
+};
+
+export const listCloudSSHKeys = async (
+  session: CloudSyncSession
+): Promise<CloudSSHKeyListResponse> => {
+  const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
+  const response = await withTimeout(`${endpoint}/ssh-keys`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${session.token}`
+    }
+  });
+  return readJson<CloudSSHKeyListResponse>(response, '获取 SSH 密钥列表失败，请稍后重试。');
+};
+
+export const rotateCloudSSHKey = async (
+  session: CloudSyncSession,
+  payload: RotateCloudSSHKeyPayload
+): Promise<RotateCloudSSHKeyResponse> => {
+  const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
+  const response = await withTimeout(`${endpoint}/ssh-keys/rotate`, {
+    method: 'POST',
+    headers: authHeaders(session.token),
+    body: JSON.stringify({
+      publicKey: payload.publicKey,
+      comment: payload.comment?.trim() || undefined,
+      reason: payload.reason?.trim() || undefined,
+      ttlDays: Number.isFinite(payload.ttlDays) ? payload.ttlDays : undefined,
+      overlapDays: Number.isFinite(payload.overlapDays) ? payload.overlapDays : undefined
+    })
+  });
+  return readJson<RotateCloudSSHKeyResponse>(response, '轮换 SSH 密钥失败，请稍后重试。');
+};
+
+export const revokeCloudSSHKey = async (
+  session: CloudSyncSession,
+  payload: {
+    keyId?: string;
+    fingerprint?: string;
+    reason?: string;
+  }
+): Promise<{ message: string }> => {
+  const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
+  const response = await withTimeout(`${endpoint}/ssh-keys/revoke`, {
+    method: 'POST',
+    headers: authHeaders(session.token),
+    body: JSON.stringify({
+      keyId: payload.keyId?.trim() || undefined,
+      fingerprint: payload.fingerprint?.trim() || undefined,
+      reason: payload.reason?.trim() || undefined
+    })
+  });
+  return readJson<{ message: string }>(response, '撤销 SSH 密钥失败，请稍后重试。');
 };
 
 export const fetchCloudSyncPolicy = async (apiBaseUrl: string): Promise<CloudSyncPolicy> => {

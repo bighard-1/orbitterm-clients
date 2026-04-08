@@ -1,0 +1,2 @@
+8eea3ec2994e27d68db434db4ef3d1266296db8c0f4cb1f16d3c716128b9784a  ./OrbitTerm_0.1.88_aarch64.dmg
+d34913dadf0a87b8a2cef9b4ba81978e821a7cac4223eed20cdbbeadb0844f0e  ./OrbitTerm_0.1.88_x64.dmg

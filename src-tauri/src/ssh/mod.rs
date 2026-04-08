@@ -21,16 +21,20 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::{sleep, timeout, Instant};
 use uuid::Uuid;
 
-use crate::error::{map_russh_error, SshBackendError, SshResult};
+use crate::error::{map_io_error, map_russh_error, SshBackendError, SshResult};
 use crate::models::{
-    AuthMethod, SftpActionResponse, SftpCompressRequest, SftpCopyRequest, SftpDownloadRequest,
-    SftpEntry, SftpExtractRequest, SftpLsRequest, SftpLsResponse, SftpMkdirRequest,
-    SftpPathUsageRequest, SftpPathUsageResponse, SftpReadTextRequest, SftpReadTextResponse,
-    SftpRenameRequest, SftpRmRequest, SftpTransferProgressEvent, SftpTransferResponse,
-    SftpUploadRequest, SshClosedEvent, SshConnectRequest, SshConnectedResponse,
-    SshDiagnosticLogEvent, SshErrorEvent, SshHostDiskInfo, SshHostInfoResponse, SshOutputEvent,
-    SshPasswordAuthStatusResponse, SshQueryCwdResponse, SshSysStatusEvent, SysStatus,
+    AuthMethod, HostProtocol, SftpActionResponse, SftpCompressRequest, SftpCopyRequest,
+    SftpDownloadRequest, SftpEntry, SftpExtractRequest, SftpLsRequest, SftpLsResponse,
+    SftpMkdirRequest, SftpPathUsageRequest, SftpPathUsageResponse, SftpReadTextRequest,
+    SftpReadTextResponse, SftpRenameRequest, SftpRmRequest, SftpTransferProgressEvent,
+    SftpTransferResponse, SftpUploadRequest, SshClosedEvent, SshConnectRequest,
+    SshConnectedResponse, SshDiagnosticLogEvent, SshErrorEvent, SshHostDiskInfo,
+    SshHostInfoResponse, SshOutputEvent, SshPasswordAuthStatusResponse, SshQueryCwdResponse,
+    SshSysStatusEvent, SysStatus,
 };
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
 #[derive(Debug)]
 pub enum SessionCommand {
@@ -42,9 +46,17 @@ pub enum SessionCommand {
 #[derive(Clone)]
 struct SessionEntry {
     command_tx: mpsc::Sender<SessionCommand>,
-    handle: Arc<Mutex<client::Handle<ClientHandler>>>,
+    handle: Option<Arc<Mutex<client::Handle<ClientHandler>>>>,
     tunnel_handles: Vec<Arc<Mutex<client::Handle<ClientHandler>>>>,
     pulse_active: Arc<RwLock<bool>>,
+    transport: SessionTransportKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionTransportKind {
+    Ssh,
+    Telnet,
+    Serial,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +91,13 @@ impl SshSessionRegistry {
         request: SshConnectRequest,
     ) -> SshResult<SshConnectedResponse> {
         validate_connect_request(&request)?;
+        let protocol = request.host_config.basic_info.protocol.clone();
+        if protocol == HostProtocol::Telnet {
+            return self.connect_telnet(app, request).await;
+        }
+        if protocol == HostProtocol::Serial {
+            return self.connect_serial(app, request).await;
+        }
 
         let timeout_secs = request
             .host_config
@@ -180,9 +199,10 @@ impl SshSessionRegistry {
                 session_id.clone(),
                 SessionEntry {
                     command_tx: command_tx.clone(),
-                    handle: handle_ref.clone(),
+                    handle: Some(handle_ref.clone()),
                     tunnel_handles: tunnel_handles.clone(),
                     pulse_active: pulse_active.clone(),
+                    transport: SessionTransportKind::Ssh,
                 },
             );
         }
@@ -308,6 +328,258 @@ impl SshSessionRegistry {
         Ok(SshConnectedResponse {
             session_id,
             pty_backend: backend,
+        })
+    }
+
+    async fn connect_telnet(
+        &self,
+        app: AppHandle,
+        request: SshConnectRequest,
+    ) -> SshResult<SshConnectedResponse> {
+        let timeout_secs = request
+            .host_config
+            .advanced_options
+            .connection_timeout
+            .max(3);
+        let host = request.host_config.basic_info.address.trim().to_string();
+        let port = request.host_config.basic_info.port;
+        let session_id = request
+            .session_id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+        emit_diagnostic_log(
+            &app,
+            &session_id,
+            "info",
+            "connect",
+            format!("开始建立 Telnet 连接: {host}:{port}"),
+        );
+
+        let stream = timeout(
+            Duration::from_secs(timeout_secs),
+            TcpStream::connect((host.as_str(), port)),
+        )
+        .await
+        .map_err(|_| SshBackendError::Timeout)?
+        .map_err(|err| map_io_error(&err))?;
+        let (mut reader, mut writer) = stream.into_split();
+        let (command_tx, mut command_rx) = mpsc::channel::<SessionCommand>(512);
+        let pulse_active = Arc::new(RwLock::new(true));
+
+        {
+            let mut sessions = self.sessions.write().await;
+            sessions.insert(
+                session_id.clone(),
+                SessionEntry {
+                    command_tx: command_tx.clone(),
+                    handle: None,
+                    tunnel_handles: Vec::new(),
+                    pulse_active,
+                    transport: SessionTransportKind::Telnet,
+                },
+            );
+        }
+
+        let monitor_registry = self.clone();
+        let monitor_app = app.clone();
+        let monitor_session_id = session_id.clone();
+        let monitor_target = LatencyProbeTarget {
+            host: host.clone(),
+            port,
+        };
+        tokio::spawn(async move {
+            monitor_registry
+                .run_latency_only_monitor(
+                    monitor_app,
+                    monitor_session_id,
+                    monitor_target,
+                )
+                .await;
+        });
+
+        let registry = self.clone();
+        let app_for_loop = app.clone();
+        let loop_session_id = session_id.clone();
+        tokio::spawn(async move {
+            let mut has_error = false;
+            let mut read_buf = vec![0_u8; 4096];
+            loop {
+                tokio::select! {
+                    cmd = command_rx.recv() => {
+                        match cmd {
+                            Some(SessionCommand::Input(data)) => {
+                                if writer.write_all(data.as_bytes()).await.is_err() {
+                                    has_error = true;
+                                    emit_error(&app_for_loop, Some(loop_session_id.clone()), SshBackendError::ChannelClosed);
+                                    break;
+                                }
+                            }
+                            Some(SessionCommand::Resize { .. }) => {}
+                            Some(SessionCommand::Disconnect) | None => break,
+                        }
+                    }
+                    read_result = reader.read(&mut read_buf) => {
+                        match read_result {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                let payload = SshOutputEvent {
+                                    session_id: loop_session_id.clone(),
+                                    data: String::from_utf8_lossy(&read_buf[..n]).to_string(),
+                                };
+                                if app_for_loop.emit("ssh-output", payload).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                has_error = true;
+                                emit_error(
+                                    &app_for_loop,
+                                    Some(loop_session_id.clone()),
+                                    SshBackendError::Network(format!("Telnet 连接中断：{err}")),
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            let _ = writer.shutdown().await;
+            registry.remove_session(&loop_session_id).await;
+            if !has_error {
+                let _ = app_for_loop.emit(
+                    "ssh-closed",
+                    SshClosedEvent {
+                        session_id: loop_session_id,
+                    },
+                );
+            }
+        });
+
+        Ok(SshConnectedResponse {
+            session_id,
+            pty_backend: "Telnet".to_string(),
+        })
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    async fn connect_serial(
+        &self,
+        _app: AppHandle,
+        _request: SshConnectRequest,
+    ) -> SshResult<SshConnectedResponse> {
+        Err(SshBackendError::Protocol(
+            "移动端暂不支持本地串口连接，请在桌面端使用 Serial。".to_string(),
+        ))
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    async fn connect_serial(
+        &self,
+        app: AppHandle,
+        request: SshConnectRequest,
+    ) -> SshResult<SshConnectedResponse> {
+        let session_id = request
+            .session_id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let serial_path = request.host_config.basic_info.serial_path.trim().to_string();
+        if serial_path.is_empty() {
+            return Err(SshBackendError::InvalidInput);
+        }
+        let baud_rate = request.host_config.basic_info.serial_baud_rate.max(300);
+        emit_diagnostic_log(
+            &app,
+            &session_id,
+            "info",
+            "connect",
+            format!("开始建立 Serial 连接: path={serial_path}, baud={baud_rate}"),
+        );
+
+        let serial_stream: SerialStream = tokio_serial::new(serial_path.clone(), baud_rate)
+            .open_native_async()
+            .map_err(|err| SshBackendError::Network(format!("打开串口失败：{err}")))?;
+        let (mut reader, mut writer) = tokio::io::split(serial_stream);
+        let (command_tx, mut command_rx) = mpsc::channel::<SessionCommand>(512);
+        let pulse_active = Arc::new(RwLock::new(true));
+
+        {
+            let mut sessions = self.sessions.write().await;
+            sessions.insert(
+                session_id.clone(),
+                SessionEntry {
+                    command_tx: command_tx.clone(),
+                    handle: None,
+                    tunnel_handles: Vec::new(),
+                    pulse_active,
+                    transport: SessionTransportKind::Serial,
+                },
+            );
+        }
+
+        let registry = self.clone();
+        let app_for_loop = app.clone();
+        let loop_session_id = session_id.clone();
+        tokio::spawn(async move {
+            let mut has_error = false;
+            let mut read_buf = vec![0_u8; 4096];
+            loop {
+                tokio::select! {
+                    cmd = command_rx.recv() => {
+                        match cmd {
+                            Some(SessionCommand::Input(data)) => {
+                                if writer.write_all(data.as_bytes()).await.is_err() {
+                                    has_error = true;
+                                    emit_error(&app_for_loop, Some(loop_session_id.clone()), SshBackendError::ChannelClosed);
+                                    break;
+                                }
+                            }
+                            Some(SessionCommand::Resize { .. }) => {}
+                            Some(SessionCommand::Disconnect) | None => break,
+                        }
+                    }
+                    read_result = reader.read(&mut read_buf) => {
+                        match read_result {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                let payload = SshOutputEvent {
+                                    session_id: loop_session_id.clone(),
+                                    data: String::from_utf8_lossy(&read_buf[..n]).to_string(),
+                                };
+                                if app_for_loop.emit("ssh-output", payload).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                has_error = true;
+                                emit_error(
+                                    &app_for_loop,
+                                    Some(loop_session_id.clone()),
+                                    SshBackendError::Network(format!("串口读写失败：{err}")),
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            let _ = writer.shutdown().await;
+            registry.remove_session(&loop_session_id).await;
+            if !has_error {
+                let _ = app_for_loop.emit(
+                    "ssh-closed",
+                    SshClosedEvent {
+                        session_id: loop_session_id,
+                    },
+                );
+            }
+        });
+
+        Ok(SshConnectedResponse {
+            session_id,
+            pty_backend: "Serial".to_string(),
         })
     }
 
@@ -1152,8 +1424,14 @@ impl SshSessionRegistry {
         timeout_secs: u64,
     ) -> SshResult<(u32, String, String)> {
         let entry = self.get_entry(session_id).await?;
+        if entry.transport != SessionTransportKind::Ssh {
+            return Err(SshBackendError::RemoteCommand(
+                "当前连接协议不支持该操作，仅 SSH 会话可执行远端命令。".to_string(),
+            ));
+        }
+        let handle = entry.handle.ok_or(SshBackendError::SessionNotFound)?;
         let mut channel = {
-            let guard = entry.handle.lock().await;
+            let guard = handle.lock().await;
             guard
                 .channel_open_session()
                 .await
@@ -1199,8 +1477,12 @@ impl SshSessionRegistry {
 
     async fn open_sftp_session(&self, session_id: &str) -> SshResult<SftpSession> {
         let entry = self.get_entry(session_id).await?;
+        if entry.transport != SessionTransportKind::Ssh {
+            return Err(SshBackendError::SftpUnsupported);
+        }
+        let handle = entry.handle.ok_or(SshBackendError::SessionNotFound)?;
         let channel = {
-            let guard = entry.handle.lock().await;
+            let guard = handle.lock().await;
             guard
                 .channel_open_session()
                 .await
@@ -1236,18 +1518,20 @@ impl SshSessionRegistry {
     }
 
     async fn force_close_entry(&self, session_id: String, entry: SessionEntry) {
-        {
-            let guard = entry.handle.lock().await;
-            let _ = guard
-                .disconnect(Disconnect::ByApplication, "session closed", "zh-CN")
-                .await;
-        }
+        if let Some(handle) = entry.handle {
+            {
+                let guard = handle.lock().await;
+                let _ = guard
+                    .disconnect(Disconnect::ByApplication, "session closed", "zh-CN")
+                    .await;
+            }
 
-        for tunnel_handle in entry.tunnel_handles.iter().rev() {
-            let guard = tunnel_handle.lock().await;
-            let _ = guard
-                .disconnect(Disconnect::ByApplication, "session closed", "zh-CN")
-                .await;
+            for tunnel_handle in entry.tunnel_handles.iter().rev() {
+                let guard = tunnel_handle.lock().await;
+                let _ = guard
+                    .disconnect(Disconnect::ByApplication, "session closed", "zh-CN")
+                    .await;
+            }
         }
 
         self.remove_session(&session_id).await;
@@ -1316,6 +1600,42 @@ impl SshSessionRegistry {
             }
 
             sleep(interval).await;
+        }
+    }
+
+    async fn run_latency_only_monitor(
+        &self,
+        app: AppHandle,
+        session_id: String,
+        latency_probe_target: LatencyProbeTarget,
+    ) {
+        loop {
+            if !self.session_exists(&session_id).await {
+                break;
+            }
+
+            let (icmp_latency, tcp_latency) = tokio::join!(
+                sample_local_icmp_rtt_ms(&latency_probe_target),
+                sample_local_tcp_rtt_ms(&latency_probe_target),
+            );
+            let merged_latency = merge_latency_samples(icmp_latency, tcp_latency, 0.0);
+            let _ = app.emit(
+                "ssh-sys-status",
+                SshSysStatusEvent {
+                    session_id: session_id.clone(),
+                    status: SysStatus {
+                        cpu_usage_percent: 0.0,
+                        memory_usage_percent: 0.0,
+                        net_rx_bytes_per_sec: 0.0,
+                        net_tx_bytes_per_sec: 0.0,
+                        latency_ms: merged_latency,
+                        sampled_at: now_unix_ts(),
+                        interval_secs: 6,
+                    },
+                },
+            );
+
+            sleep(Duration::from_secs(6)).await;
         }
     }
 }
@@ -2070,12 +2390,6 @@ fn build_sys_status(
 }
 
 fn validate_connect_request(request: &SshConnectRequest) -> SshResult<()> {
-    if request.host_config.basic_info.address.trim().is_empty()
-        || request.identity_config.username.trim().is_empty()
-    {
-        return Err(SshBackendError::InvalidInput);
-    }
-
     if request.host_config.identity_id.trim().is_empty()
         || request.identity_config.id.trim().is_empty()
         || request.host_config.identity_id != request.identity_config.id
@@ -2083,32 +2397,81 @@ fn validate_connect_request(request: &SshConnectRequest) -> SshResult<()> {
         return Err(SshBackendError::InvalidInput);
     }
 
-    for hop in &request.proxy_chain {
-        if hop.host_config.basic_info.address.trim().is_empty()
-            || hop.identity_config.username.trim().is_empty()
-            || hop.host_config.identity_id.trim().is_empty()
-            || hop.identity_config.id.trim().is_empty()
-            || hop.host_config.identity_id != hop.identity_config.id
-        {
-            return Err(SshBackendError::InvalidInput);
+    match request.host_config.basic_info.protocol {
+        HostProtocol::Ssh => {
+            if request.host_config.basic_info.address.trim().is_empty()
+                || request.identity_config.username.trim().is_empty()
+            {
+                return Err(SshBackendError::InvalidInput);
+            }
+            for hop in &request.proxy_chain {
+                if hop.host_config.basic_info.address.trim().is_empty()
+                    || hop.identity_config.username.trim().is_empty()
+                    || hop.host_config.identity_id.trim().is_empty()
+                    || hop.identity_config.id.trim().is_empty()
+                    || hop.host_config.identity_id != hop.identity_config.id
+                {
+                    return Err(SshBackendError::InvalidInput);
+                }
+                if !is_identity_auth_valid(&hop.identity_config, HostProtocol::Ssh) {
+                    return Err(SshBackendError::InvalidInput);
+                }
+            }
+            if !is_identity_auth_valid(&request.identity_config, HostProtocol::Ssh) {
+                return Err(SshBackendError::InvalidInput);
+            }
         }
-    }
-
-    if !is_identity_auth_valid(&request.identity_config) {
-        return Err(SshBackendError::InvalidInput);
-    }
-    for hop in &request.proxy_chain {
-        if !is_identity_auth_valid(&hop.identity_config) {
-            return Err(SshBackendError::InvalidInput);
+        HostProtocol::Telnet => {
+            if request.host_config.basic_info.address.trim().is_empty()
+                || request.host_config.basic_info.port == 0
+            {
+                return Err(SshBackendError::InvalidInput);
+            }
+            if !is_identity_auth_valid(&request.identity_config, HostProtocol::Telnet) {
+                return Err(SshBackendError::InvalidInput);
+            }
+        }
+        HostProtocol::Serial => {
+            if request.host_config.basic_info.serial_path.trim().is_empty()
+                || request.host_config.basic_info.serial_baud_rate < 300
+            {
+                return Err(SshBackendError::InvalidInput);
+            }
         }
     }
 
     Ok(())
 }
 
-fn is_identity_auth_valid(identity: &crate::models::IdentityConfig) -> bool {
-    match identity.auth_config.method {
-        AuthMethod::Password => {
+fn is_identity_auth_valid(
+    identity: &crate::models::IdentityConfig,
+    protocol: HostProtocol,
+) -> bool {
+    match protocol {
+        HostProtocol::Ssh => match identity.auth_config.method {
+            AuthMethod::Password => {
+                identity
+                    .auth_config
+                    .password
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .len()
+                    > 0
+            }
+            AuthMethod::PrivateKey => {
+                identity
+                    .auth_config
+                    .private_key
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .len()
+                    > 0
+            }
+            AuthMethod::None => false,
+        },
+        HostProtocol::Telnet => {
             identity
                 .auth_config
                 .password
@@ -2118,17 +2481,127 @@ fn is_identity_auth_valid(identity: &crate::models::IdentityConfig) -> bool {
                 .len()
                 > 0
         }
+        HostProtocol::Serial => true,
+    }
+}
+
+fn auth_method_label(method: &AuthMethod) -> &'static str {
+    match method {
+        AuthMethod::None => "none",
+        AuthMethod::Password => "password",
+        AuthMethod::PrivateKey => "private_key",
+    }
+}
+
+async fn authenticate_identity(
+    handle: &mut client::Handle<ClientHandler>,
+    identity: &crate::models::IdentityConfig,
+    timeout_secs: u64,
+    app: &AppHandle,
+    session_id: &str,
+    hop_label: &str,
+) -> SshResult<()> {
+    let timeout_duration = Duration::from_secs(timeout_secs);
+    let auth_method = auth_method_label(&identity.auth_config.method);
+    emit_diagnostic_log(
+        app,
+        session_id,
+        "info",
+        "auth",
+        format!(
+            "{hop_label} 开始认证: username={}, method={auth_method}",
+            identity.username
+        ),
+    );
+
+    let auth_result = match identity.auth_config.method {
+        AuthMethod::None => return Err(SshBackendError::InvalidInput),
+        AuthMethod::Password => {
+            let password = identity
+                .auth_config
+                .password
+                .clone()
+                .ok_or(SshBackendError::InvalidInput)?;
+            let result = timeout(
+                timeout_duration,
+                handle.authenticate_password(identity.username.clone(), password),
+            )
+            .await
+            .map_err(|_| SshBackendError::Timeout)
+            .and_then(|result| result.map_err(|err| map_russh_error(&err)));
+
+            match result {
+                Ok(value) => value,
+                Err(err) => {
+                    emit_diagnostic_log(
+                        app,
+                        session_id,
+                        "error",
+                        "auth",
+                        format!("{hop_label} 认证请求失败: {}", err.user_message()),
+                    );
+                    return Err(err);
+                }
+            }
+        }
         AuthMethod::PrivateKey => {
-            identity
+            let key_text = identity
                 .auth_config
                 .private_key
                 .as_deref()
-                .unwrap_or_default()
-                .trim()
-                .len()
-                > 0
+                .ok_or(SshBackendError::InvalidInput)?;
+
+            let private_key = decode_openssh(
+                key_text.as_bytes(),
+                identity.auth_config.passphrase.as_deref(),
+            )
+            .map_err(|_| SshBackendError::AuthFailure)?;
+
+            let key = PrivateKeyWithHashAlg::new(Arc::new(private_key), None);
+
+            let result = timeout(
+                timeout_duration,
+                handle.authenticate_publickey(identity.username.clone(), key),
+            )
+            .await
+            .map_err(|_| SshBackendError::Timeout)
+            .and_then(|result| result.map_err(|err| map_russh_error(&err)));
+
+            match result {
+                Ok(value) => value,
+                Err(err) => {
+                    emit_diagnostic_log(
+                        app,
+                        session_id,
+                        "error",
+                        "auth",
+                        format!("{hop_label} 认证请求失败: {}", err.user_message()),
+                    );
+                    return Err(err);
+                }
+            }
         }
+    };
+
+    if !auth_result.success() {
+        emit_diagnostic_log(
+            app,
+            session_id,
+            "warn",
+            "auth",
+            format!("{hop_label} 认证失败（服务器拒绝）。"),
+        );
+        return Err(SshBackendError::AuthFailure);
     }
+
+    emit_diagnostic_log(
+        app,
+        session_id,
+        "info",
+        "auth",
+        format!("{hop_label} 认证成功。"),
+    );
+    Ok(())
 }
 
 async fn establish_connection_chain(
@@ -2289,116 +2762,6 @@ async fn connect_via_parent(
     .and_then(|result| result.map_err(|err| map_russh_error(&err)))
 }
 
-async fn authenticate_identity(
-    handle: &mut client::Handle<ClientHandler>,
-    identity: &crate::models::IdentityConfig,
-    timeout_secs: u64,
-    app: &AppHandle,
-    session_id: &str,
-    hop_label: &str,
-) -> SshResult<()> {
-    let timeout_duration = Duration::from_secs(timeout_secs);
-    let auth_method = auth_method_label(&identity.auth_config.method);
-    emit_diagnostic_log(
-        app,
-        session_id,
-        "info",
-        "auth",
-        format!(
-            "{hop_label} 开始认证: username={}, method={auth_method}",
-            identity.username
-        ),
-    );
-
-    let auth_result = match identity.auth_config.method {
-        AuthMethod::Password => {
-            let password = identity
-                .auth_config
-                .password
-                .clone()
-                .ok_or(SshBackendError::InvalidInput)?;
-            let result = timeout(
-                timeout_duration,
-                handle.authenticate_password(identity.username.clone(), password),
-            )
-            .await
-            .map_err(|_| SshBackendError::Timeout)
-            .and_then(|result| result.map_err(|err| map_russh_error(&err)));
-
-            match result {
-                Ok(value) => value,
-                Err(err) => {
-                    emit_diagnostic_log(
-                        app,
-                        session_id,
-                        "error",
-                        "auth",
-                        format!("{hop_label} 认证请求失败: {}", err.user_message()),
-                    );
-                    return Err(err);
-                }
-            }
-        }
-        AuthMethod::PrivateKey => {
-            let key_text = identity
-                .auth_config
-                .private_key
-                .as_deref()
-                .ok_or(SshBackendError::InvalidInput)?;
-
-            let private_key = decode_openssh(
-                key_text.as_bytes(),
-                identity.auth_config.passphrase.as_deref(),
-            )
-            .map_err(|_| SshBackendError::AuthFailure)?;
-
-            let key = PrivateKeyWithHashAlg::new(Arc::new(private_key), None);
-
-            let result = timeout(
-                timeout_duration,
-                handle.authenticate_publickey(identity.username.clone(), key),
-            )
-            .await
-            .map_err(|_| SshBackendError::Timeout)
-            .and_then(|result| result.map_err(|err| map_russh_error(&err)));
-
-            match result {
-                Ok(value) => value,
-                Err(err) => {
-                    emit_diagnostic_log(
-                        app,
-                        session_id,
-                        "error",
-                        "auth",
-                        format!("{hop_label} 认证请求失败: {}", err.user_message()),
-                    );
-                    return Err(err);
-                }
-            }
-        }
-    };
-
-    if !auth_result.success() {
-        emit_diagnostic_log(
-            app,
-            session_id,
-            "warn",
-            "auth",
-            format!("{hop_label} 认证失败（服务器拒绝）。"),
-        );
-        return Err(SshBackendError::AuthFailure);
-    }
-
-    emit_diagnostic_log(
-        app,
-        session_id,
-        "info",
-        "auth",
-        format!("{hop_label} 认证成功。"),
-    );
-    Ok(())
-}
-
 fn map_sftp_error(err: SftpError) -> SshBackendError {
     match err {
         SftpError::Status(status) => match status.status_code {
@@ -2499,13 +2862,6 @@ fn format_algorithm_list<T: core::fmt::Debug>(items: &[T], max_count: usize) -> 
         return "unknown".to_string();
     }
     list.join(", ")
-}
-
-fn auth_method_label(method: &AuthMethod) -> &'static str {
-    match method {
-        AuthMethod::Password => "password",
-        AuthMethod::PrivateKey => "private_key",
-    }
 }
 
 fn emit_diagnostic_log(

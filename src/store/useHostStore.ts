@@ -8,7 +8,7 @@ import {
   type Step2FormValues,
   type Step3FormValues
 } from '../schemas/hostSchemas';
-import type { HostConfig, IdentityConfig, Snippet } from '../types/host';
+import type { HostConfig, HostProtocol, IdentityConfig, Snippet } from '../types/host';
 import {
   bindCloudUnlockCredentials,
   clearVaultSession,
@@ -23,6 +23,7 @@ import {
   beginCloudUser2FA,
   CloudSyncConflictError,
   CloudSyncRequestError,
+  type CloudSSHKeyItem,
   clearCloudSyncSession,
   discoverCloudSyncPolicy,
   disableCloudUser2FA,
@@ -30,18 +31,22 @@ import {
   fetchCloudSyncPolicy,
   getCloudUser2FAStatus,
   getCloudLicenseStatus,
+  listCloudSSHKeys,
   listCloudDevices,
   loginCloudSync,
   logoutAllCloudDevices,
   logoutCloudDevice,
   pullCloudSyncBlob,
   pushCloudSyncBlob,
+  revokeCloudSSHKey as revokeCloudSSHKeyRemote,
+  rotateCloudSSHKey as rotateCloudSSHKeyRemote,
   persistCloudSyncSession,
   readCloudSyncPolicy,
   readCloudSyncSession,
   readCloudSyncCursor,
   registerCloudSync,
   shouldAllowManualSyncUrlEntry,
+  type RotateCloudSSHKeyPayload,
   writeCloudSyncCursor,
   type CloudUser2FABeginResponse,
   type CloudUser2FAStatus,
@@ -79,10 +84,14 @@ export interface TerminalSession {
 export interface HostEditPayload {
   basicInfo: {
     name: string;
+    group: string;
     address: string;
     port: number;
     description: string;
     tagsText: string;
+    protocol: HostProtocol;
+    serialPath: string;
+    serialBaudRate: number;
   };
   identity: {
     name: string;
@@ -113,7 +122,12 @@ interface HostState {
   cloudSyncVersion: number | null;
   cloudSyncLastAt: string | null;
   cloudDevices: CloudDeviceItem[];
+  cloudSSHKeys: CloudSSHKeyItem[];
+  cloudSSHCanRotate: boolean;
+  cloudSSHDefaultTtlDays: number;
+  cloudSSHOverlapDays: number;
   isLoadingCloudDevices: boolean;
+  isLoadingCloudSSHKeys: boolean;
   isSyncingCloud: boolean;
   cloudSyncError: string | null;
   activeSessions: TerminalSession[];
@@ -153,6 +167,9 @@ interface HostState {
   disableCloudUser2FA: (payload: { otpCode?: string; backupCode?: string }) => Promise<void>;
   activateCloudLicenseCode: (code: string) => Promise<void>;
   loadCloudDevices: () => Promise<void>;
+  loadCloudSSHKeys: () => Promise<void>;
+  rotateCloudSSHKey: (payload: RotateCloudSSHKeyPayload) => Promise<void>;
+  revokeCloudSSHKey: (payload: { keyId?: string; fingerprint?: string; reason?: string }) => Promise<void>;
   revokeCloudDevice: (deviceId: string) => Promise<void>;
   revokeAllCloudDevices: () => Promise<void>;
   syncPushToCloud: (options?: CloudSyncPushOptions) => Promise<void>;
@@ -194,10 +211,14 @@ interface HostState {
 }
 
 const initialBasicInfo: Step1FormValues = {
+  protocol: 'ssh',
   name: '',
+  group: '',
   address: '',
   port: 22,
   description: '',
+  serialPath: '',
+  serialBaudRate: 115200,
   identityMode: 'new',
   identityId: '',
   identityName: '',
@@ -273,7 +294,12 @@ const createFallbackId = (prefix: string): string => {
 
 const normalizeAuthConfig = (value: unknown): Step2FormValues => {
   const auth = asRecord(value);
-  const method = auth?.method === 'privateKey' ? 'privateKey' : 'password';
+  const method =
+    auth?.method === 'privateKey'
+      ? 'privateKey'
+      : auth?.method === 'none'
+        ? 'none'
+        : 'password';
   return {
     method,
     password: asString(auth?.password),
@@ -336,14 +362,30 @@ const normalizeHosts = (
     }
 
     const address = asString(basicInfo.address).trim();
+    const protocolRaw = asString(basicInfo.protocol).trim().toLowerCase();
+    const protocol: HostProtocol =
+      protocolRaw === 'telnet' ? 'telnet' : protocolRaw === 'serial' ? 'serial' : 'ssh';
     const identityId = asString(host.identityId).trim();
-    if (!address || !identityId) {
+    if (!identityId) {
+      discarded += 1;
+      continue;
+    }
+    if (protocol !== 'serial' && !address) {
       discarded += 1;
       continue;
     }
 
-    const port = asInteger(basicInfo.port, 22, 1, 65535);
-    const normalizedName = asString(basicInfo.name).trim() || `${address}:${port}`;
+    const port =
+      protocol === 'ssh'
+        ? asInteger(basicInfo.port, 22, 1, 65535)
+        : protocol === 'telnet'
+          ? asInteger(basicInfo.port, 23, 1, 65535)
+          : asInteger(basicInfo.port, 1, 1, 65535);
+    const serialPath = asString(basicInfo.serialPath).trim();
+    const serialBaudRate = asInteger(basicInfo.serialBaudRate, 115200, 300, 4_000_000);
+    const normalizedName =
+      asString(basicInfo.name).trim() ||
+      (protocol === 'serial' ? serialPath || 'serial-device' : `${address}:${port}`);
     const rawTags = Array.isArray(advancedOptions.tags) ? advancedOptions.tags : [];
     const tags = Array.from(
       new Set(
@@ -357,9 +399,13 @@ const normalizeHosts = (
     hosts.push({
       basicInfo: {
         name: normalizedName,
-        address,
+        group: asString(basicInfo.group).trim(),
+        address: protocol === 'serial' ? 'serial.local' : address,
         port,
-        description: asString(basicInfo.description)
+        description: asString(basicInfo.description),
+        protocol,
+        serialPath,
+        serialBaudRate
       },
       identityId,
       advancedOptions: {
@@ -585,9 +631,13 @@ const buildProxyChain = (
       hostConfig: {
         basicInfo: {
           name: `manual-jump-${parsed.address}:${parsed.port}`,
+          group: '',
           address: parsed.address,
           port: parsed.port,
-          description: 'manual proxy jump'
+          description: 'manual proxy jump',
+          protocol: 'ssh',
+          serialPath: '',
+          serialBaudRate: 115200
         },
         identityId: targetIdentity.id,
         advancedOptions: {
@@ -914,7 +964,12 @@ export const useHostStore = create<HostState>((set, get) => ({
   cloudSyncVersion: null,
   cloudSyncLastAt: null,
   cloudDevices: [],
+  cloudSSHKeys: [],
+  cloudSSHCanRotate: false,
+  cloudSSHDefaultTtlDays: 90,
+  cloudSSHOverlapDays: 7,
   isLoadingCloudDevices: false,
+  isLoadingCloudSSHKeys: false,
   isSyncingCloud: false,
   cloudSyncError: null,
   activeSessions: [],
@@ -966,7 +1021,12 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSyncVersion: cloudCursor?.version ?? null,
         cloudSyncLastAt: cloudCursor?.updatedAt ?? null,
         cloudDevices: [],
+        cloudSSHKeys: [],
+        cloudSSHCanRotate: false,
+        cloudSSHDefaultTtlDays: 90,
+        cloudSSHOverlapDays: 7,
         isLoadingCloudDevices: false,
+        isLoadingCloudSSHKeys: false,
         cloudSyncError: null
       });
       if (normalized.discarded > 0) {
@@ -987,6 +1047,7 @@ export const useHostStore = create<HostState>((set, get) => ({
           await Promise.all([
             get().syncPullFromCloud({ source: 'auto' }),
             get().loadCloudDevices(),
+            get().loadCloudSSHKeys(),
             get().refreshCloudLicenseStatus(),
             get().refreshCloudUser2FAStatus()
           ]);
@@ -1011,7 +1072,12 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSyncVersion: null,
         cloudSyncLastAt: null,
         cloudDevices: [],
-        isLoadingCloudDevices: false
+        cloudSSHKeys: [],
+        cloudSSHCanRotate: false,
+        cloudSSHDefaultTtlDays: 90,
+        cloudSSHOverlapDays: 7,
+        isLoadingCloudDevices: false,
+        isLoadingCloudSSHKeys: false
       });
     }
   },
@@ -1056,7 +1122,12 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSyncVersion: cloudCursor?.version ?? null,
         cloudSyncLastAt: cloudCursor?.updatedAt ?? null,
         cloudDevices: [],
+        cloudSSHKeys: [],
+        cloudSSHCanRotate: false,
+        cloudSSHDefaultTtlDays: 90,
+        cloudSSHOverlapDays: 7,
         isLoadingCloudDevices: false,
+        isLoadingCloudSSHKeys: false,
         cloudSyncError: null
       });
       if (normalized.discarded > 0) {
@@ -1069,6 +1140,7 @@ export const useHostStore = create<HostState>((set, get) => ({
           await Promise.all([
             get().syncPullFromCloud({ source: 'auto' }),
             get().loadCloudDevices(),
+            get().loadCloudSSHKeys(),
             get().refreshCloudLicenseStatus(),
             get().refreshCloudUser2FAStatus()
           ]);
@@ -1093,7 +1165,12 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSyncVersion: null,
         cloudSyncLastAt: null,
         cloudDevices: [],
-        isLoadingCloudDevices: false
+        cloudSSHKeys: [],
+        cloudSSHCanRotate: false,
+        cloudSSHDefaultTtlDays: 90,
+        cloudSSHOverlapDays: 7,
+        isLoadingCloudDevices: false,
+        isLoadingCloudSSHKeys: false
       });
     }
   },
@@ -1132,7 +1209,12 @@ export const useHostStore = create<HostState>((set, get) => ({
       cloudSyncVersion: null,
       cloudSyncLastAt: null,
       cloudDevices: [],
+      cloudSSHKeys: [],
+      cloudSSHCanRotate: false,
+      cloudSSHDefaultTtlDays: 90,
+      cloudSSHOverlapDays: 7,
       isLoadingCloudDevices: false,
+      isLoadingCloudSSHKeys: false,
       activeSessions: [],
       activeSessionId: null,
       terminalError: null,
@@ -1170,7 +1252,12 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSyncVersion: cloudCursor?.version ?? null,
         cloudSyncLastAt: cloudCursor?.updatedAt ?? null,
         cloudDevices: [],
+        cloudSSHKeys: [],
+        cloudSSHCanRotate: false,
+        cloudSSHDefaultTtlDays: 90,
+        cloudSSHOverlapDays: 7,
         isLoadingCloudDevices: false,
+        isLoadingCloudSSHKeys: false,
         isSyncingCloud: false,
         cloudSyncError: null
       });
@@ -1179,6 +1266,7 @@ export const useHostStore = create<HostState>((set, get) => ({
         await Promise.all([
           get().syncPullFromCloud({ source: 'auto' }),
           get().loadCloudDevices(),
+          get().loadCloudSSHKeys(),
           get().refreshCloudLicenseStatus(),
           get().refreshCloudUser2FAStatus()
         ]);
@@ -1232,7 +1320,12 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSyncVersion: cloudCursor?.version ?? null,
         cloudSyncLastAt: cloudCursor?.updatedAt ?? null,
         cloudDevices: [],
+        cloudSSHKeys: [],
+        cloudSSHCanRotate: false,
+        cloudSSHDefaultTtlDays: 90,
+        cloudSSHOverlapDays: 7,
         isLoadingCloudDevices: false,
+        isLoadingCloudSSHKeys: false,
         isSyncingCloud: false,
         cloudSyncError: null
       });
@@ -1241,6 +1334,7 @@ export const useHostStore = create<HostState>((set, get) => ({
         await Promise.all([
           get().syncPullFromCloud({ source: 'auto' }),
           get().loadCloudDevices(),
+          get().loadCloudSSHKeys(),
           get().refreshCloudLicenseStatus(),
           get().refreshCloudUser2FAStatus()
         ]);
@@ -1277,7 +1371,12 @@ export const useHostStore = create<HostState>((set, get) => ({
       cloudSyncVersion: null,
       cloudSyncLastAt: null,
       cloudDevices: [],
+      cloudSSHKeys: [],
+      cloudSSHCanRotate: false,
+      cloudSSHDefaultTtlDays: 90,
+      cloudSSHOverlapDays: 7,
       isLoadingCloudDevices: false,
+      isLoadingCloudSSHKeys: false,
       cloudSyncError: null
     });
   },
@@ -1649,6 +1748,109 @@ export const useHostStore = create<HostState>((set, get) => ({
       });
     }
   },
+  loadCloudSSHKeys: async () => {
+    const state = get();
+    const session = state.cloudSyncSession ?? readCloudSyncSession();
+    if (!session || state.appView !== 'dashboard') {
+      return;
+    }
+
+    set({ isLoadingCloudSSHKeys: true, cloudSyncError: null });
+    try {
+      await get().refreshCloudSyncPolicy({ silent: true });
+      const latestSession = get().cloudSyncSession ?? session;
+      const payload = await listCloudSSHKeys(latestSession);
+      set({
+        cloudSyncSession: latestSession,
+        cloudSSHKeys: payload.keys ?? [],
+        cloudSSHCanRotate: payload.canRotate === true,
+        cloudSSHDefaultTtlDays: Math.max(1, Number(payload.defaultTtlDays || 90)),
+        cloudSSHOverlapDays: Math.max(1, Number(payload.overlapDays || 7)),
+        isLoadingCloudSSHKeys: false,
+        cloudSyncError: null
+      });
+    } catch (error) {
+      const fallback = '加载 SSH 密钥列表失败，请稍后重试。';
+      const message = extractErrorMessage(error, fallback);
+      set({
+        isLoadingCloudSSHKeys: false,
+        cloudSyncError: message || fallback
+      });
+    }
+  },
+  rotateCloudSSHKey: async (payload) => {
+    const state = get();
+    const session = state.cloudSyncSession ?? readCloudSyncSession();
+    if (!session || state.appView !== 'dashboard') {
+      throw new Error('请先登录同步账号。');
+    }
+    const publicKey = payload.publicKey?.trim() ?? '';
+    if (!publicKey) {
+      throw new Error('请输入 SSH 公钥后再轮换。');
+    }
+
+    set({ isLoadingCloudSSHKeys: true, cloudSyncError: null });
+    try {
+      await get().refreshCloudSyncPolicy({ silent: true });
+      const latestSession = get().cloudSyncSession ?? session;
+      const response = await rotateCloudSSHKeyRemote(latestSession, payload);
+      const latest = await listCloudSSHKeys(latestSession);
+      set({
+        cloudSyncSession: latestSession,
+        cloudSSHKeys: latest.keys ?? [],
+        cloudSSHCanRotate: latest.canRotate === true,
+        cloudSSHDefaultTtlDays: Math.max(1, Number(latest.defaultTtlDays || 90)),
+        cloudSSHOverlapDays: Math.max(1, Number(latest.overlapDays || 7)),
+        isLoadingCloudSSHKeys: false,
+        cloudSyncError: null
+      });
+      toast.success(response.message || 'SSH 密钥轮换成功。');
+    } catch (error) {
+      const fallback = '轮换 SSH 密钥失败，请稍后重试。';
+      const message = extractErrorMessage(error, fallback);
+      set({
+        isLoadingCloudSSHKeys: false,
+        cloudSyncError: message || fallback
+      });
+      throw new Error(message || fallback);
+    }
+  },
+  revokeCloudSSHKey: async (payload) => {
+    const state = get();
+    const session = state.cloudSyncSession ?? readCloudSyncSession();
+    if (!session || state.appView !== 'dashboard') {
+      throw new Error('请先登录同步账号。');
+    }
+    if (!(payload.keyId?.trim() || payload.fingerprint?.trim())) {
+      throw new Error('请选择要撤销的 SSH 密钥。');
+    }
+
+    set({ isLoadingCloudSSHKeys: true, cloudSyncError: null });
+    try {
+      await get().refreshCloudSyncPolicy({ silent: true });
+      const latestSession = get().cloudSyncSession ?? session;
+      const response = await revokeCloudSSHKeyRemote(latestSession, payload);
+      const latest = await listCloudSSHKeys(latestSession);
+      set({
+        cloudSyncSession: latestSession,
+        cloudSSHKeys: latest.keys ?? [],
+        cloudSSHCanRotate: latest.canRotate === true,
+        cloudSSHDefaultTtlDays: Math.max(1, Number(latest.defaultTtlDays || 90)),
+        cloudSSHOverlapDays: Math.max(1, Number(latest.overlapDays || 7)),
+        isLoadingCloudSSHKeys: false,
+        cloudSyncError: null
+      });
+      toast.success(response.message || 'SSH 密钥已撤销。');
+    } catch (error) {
+      const fallback = '撤销 SSH 密钥失败，请稍后重试。';
+      const message = extractErrorMessage(error, fallback);
+      set({
+        isLoadingCloudSSHKeys: false,
+        cloudSyncError: message || fallback
+      });
+      throw new Error(message || fallback);
+    }
+  },
   revokeCloudDevice: async (deviceId) => {
     const state = get();
     const session = state.cloudSyncSession ?? readCloudSyncSession();
@@ -1676,7 +1878,12 @@ export const useHostStore = create<HostState>((set, get) => ({
           cloudSyncVersion: null,
           cloudSyncLastAt: null,
           cloudDevices: [],
+          cloudSSHKeys: [],
+          cloudSSHCanRotate: false,
+          cloudSSHDefaultTtlDays: 90,
+          cloudSSHOverlapDays: 7,
           isLoadingCloudDevices: false,
+          isLoadingCloudSSHKeys: false,
           cloudSyncError: null
         });
         toast.message('当前设备已退出云同步登录。');
@@ -1724,7 +1931,12 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSyncVersion: null,
         cloudSyncLastAt: null,
         cloudDevices: [],
+        cloudSSHKeys: [],
+        cloudSSHCanRotate: false,
+        cloudSSHDefaultTtlDays: 90,
+        cloudSSHOverlapDays: 7,
         isLoadingCloudDevices: false,
+        isLoadingCloudSSHKeys: false,
         cloudSyncError: null
       });
       toast.success('已退出所有设备。');
@@ -2297,19 +2509,34 @@ export const useHostStore = create<HostState>((set, get) => ({
       throw new Error('未找到该主机关联的身份配置。');
     }
 
-    const normalizedAddress = payload.basicInfo.address.trim();
-    const normalizedPort = Math.round(payload.basicInfo.port);
+    const protocol = payload.basicInfo.protocol ?? 'ssh';
+    const isSerialProtocol = protocol === 'serial';
+    const normalizedAddress = isSerialProtocol ? 'serial.local' : payload.basicInfo.address.trim();
+    const normalizedPort = isSerialProtocol ? 1 : Math.round(payload.basicInfo.port);
+    const normalizedSerialPath = payload.basicInfo.serialPath.trim();
+    const normalizedSerialBaudRate = Math.max(
+      300,
+      Math.min(4_000_000, Math.round(payload.basicInfo.serialBaudRate))
+    );
     const normalizedName =
-      payload.basicInfo.name.trim() || `${normalizedAddress}:${normalizedPort}`;
+      payload.basicInfo.name.trim() ||
+      (isSerialProtocol
+        ? normalizedSerialPath || `serial-${normalizedSerialBaudRate}`
+        : `${normalizedAddress}:${normalizedPort}`);
+    const normalizedGroup = payload.basicInfo.group.trim();
     const normalizedDescription = payload.basicInfo.description.trim();
     const nextTags = parseTags(payload.basicInfo.tagsText);
 
     const updatedHost: HostConfig = finalHostSchema.parse({
       basicInfo: {
         name: normalizedName,
+        group: normalizedGroup,
         address: normalizedAddress,
         port: normalizedPort,
-        description: normalizedDescription
+        description: normalizedDescription,
+        protocol,
+        serialPath: normalizedSerialPath,
+        serialBaudRate: normalizedSerialBaudRate
       },
       identityId: currentHost.identityId,
       advancedOptions: {
@@ -2321,11 +2548,27 @@ export const useHostStore = create<HostState>((set, get) => ({
     const normalizedIdentityUsername = payload.identity.username.trim();
     const normalizedIdentityName =
       payload.identity.name.trim() || `${normalizedIdentityUsername}@${normalizedAddress}`;
+    const nextAuthConfig =
+      protocol === 'serial'
+        ? {
+            method: 'none' as const,
+            password: '',
+            privateKey: '',
+            passphrase: ''
+          }
+        : protocol === 'telnet'
+          ? {
+              method: 'password' as const,
+              password: payload.identity.authConfig.password ?? '',
+              privateKey: '',
+              passphrase: ''
+            }
+          : payload.identity.authConfig;
     const updatedIdentity: IdentityConfig = identitySchema.parse({
       ...currentIdentity,
       name: normalizedIdentityName,
       username: normalizedIdentityUsername,
-      authConfig: payload.identity.authConfig
+      authConfig: nextAuthConfig
     });
 
     const nextHosts = state.hosts.map((item, index) => (index === hostIndex ? updatedHost : item));
@@ -2334,7 +2577,11 @@ export const useHostStore = create<HostState>((set, get) => ({
     );
 
     const newHostId = buildHostId(updatedHost);
-    const title = updatedHost.basicInfo.name || `${updatedHost.basicInfo.address}:${updatedHost.basicInfo.port}`;
+    const title =
+      updatedHost.basicInfo.name ||
+      ((updatedHost.basicInfo.protocol ?? 'ssh') === 'serial'
+        ? updatedHost.basicInfo.serialPath || `serial-${updatedHost.basicInfo.serialBaudRate || 115200}`
+        : `${updatedHost.basicInfo.address}:${updatedHost.basicInfo.port}`);
     const nextSessions = state.activeSessions.map((session) => {
       if (session.hostId !== hostId) {
         return session;
@@ -2468,9 +2715,16 @@ export const useHostStore = create<HostState>((set, get) => ({
       throw new Error('未找到主机关联身份，请检查身份配置后重试。');
     }
 
-    const proxyChain = buildProxyChain(host, identity, state.hosts, state.identities);
+    const proxyChain =
+      (host.basicInfo.protocol ?? 'ssh') === 'ssh'
+        ? buildProxyChain(host, identity, state.hosts, state.identities)
+        : [];
     const response = await sshConnect(host, identity, proxyChain);
-    const title = host.basicInfo.name || `${host.basicInfo.address}:${host.basicInfo.port}`;
+    const title =
+      host.basicInfo.name ||
+      ((host.basicInfo.protocol ?? 'ssh') === 'serial'
+        ? host.basicInfo.serialPath || `serial-${host.basicInfo.serialBaudRate || 115200}`
+        : `${host.basicInfo.address}:${host.basicInfo.port}`);
     return {
       id: response.sessionId,
       title,
@@ -2486,10 +2740,17 @@ export const useHostStore = create<HostState>((set, get) => ({
         throw new Error('未找到主机关联身份，请检查身份配置后重试。');
       }
 
-      const proxyChain = buildProxyChain(host, identity, state.hosts, state.identities);
+      const proxyChain =
+        (host.basicInfo.protocol ?? 'ssh') === 'ssh'
+          ? buildProxyChain(host, identity, state.hosts, state.identities)
+          : [];
       const response = await sshConnect(host, identity, proxyChain);
       const hostId = buildHostId(host);
-      const title = host.basicInfo.name || `${host.basicInfo.address}:${host.basicInfo.port}`;
+      const title =
+        host.basicInfo.name ||
+        ((host.basicInfo.protocol ?? 'ssh') === 'serial'
+          ? host.basicInfo.serialPath || `serial-${host.basicInfo.serialBaudRate || 115200}`
+          : `${host.basicInfo.address}:${host.basicInfo.port}`);
       set((state) => ({
         activeSessions: [
           ...state.activeSessions,
@@ -2613,10 +2874,14 @@ export const useHostStore = create<HostState>((set, get) => ({
       currentStep: 1,
       basicInfo: {
         ...initialBasicInfo,
+        protocol: 'ssh',
         name: '我的第一台服务器',
+        group: '演示',
         address: '127.0.0.1',
         port: 22,
         description: '本地 Demo 服务器',
+        serialPath: '',
+        serialBaudRate: 115200,
         identityMode: 'new',
         identityName: '默认身份',
         identityUsername: 'root'
@@ -2633,10 +2898,21 @@ export const useHostStore = create<HostState>((set, get) => ({
     const state = get();
     let identityId = state.basicInfo.identityId.trim();
     let nextIdentities = state.identities;
-    const normalizedAddress = state.basicInfo.address.trim();
-    const normalizedPort = Math.round(state.basicInfo.port);
+    const protocol = state.basicInfo.protocol ?? 'ssh';
+    const isSerialProtocol = protocol === 'serial';
+    const normalizedAddress = isSerialProtocol ? 'serial.local' : state.basicInfo.address.trim();
+    const normalizedPort = isSerialProtocol ? 1 : Math.round(state.basicInfo.port);
+    const normalizedSerialPath = state.basicInfo.serialPath.trim();
+    const normalizedSerialBaudRate = Math.max(
+      300,
+      Math.min(4_000_000, Math.round(state.basicInfo.serialBaudRate))
+    );
     const normalizedHostName =
-      state.basicInfo.name.trim() || `${normalizedAddress}:${normalizedPort}`;
+      state.basicInfo.name.trim() ||
+      (isSerialProtocol
+        ? normalizedSerialPath || `serial-${normalizedSerialBaudRate}`
+        : `${normalizedAddress}:${normalizedPort}`);
+    const normalizedGroup = state.basicInfo.group.trim();
     const normalizedDescription = state.basicInfo.description.trim();
 
     const maxHosts = Math.max(0, Number(state.cloudLicenseStatus?.maxHosts ?? 0));
@@ -2648,11 +2924,27 @@ export const useHostStore = create<HostState>((set, get) => ({
       const normalizedIdentityUsername = state.basicInfo.identityUsername.trim();
       const normalizedIdentityName =
         state.basicInfo.identityName.trim() || `${normalizedIdentityUsername}@${normalizedAddress}`;
+      const nextAuthConfig =
+        protocol === 'serial'
+          ? {
+              method: 'none' as const,
+              password: '',
+              privateKey: '',
+              passphrase: ''
+            }
+          : protocol === 'telnet'
+            ? {
+                method: 'password' as const,
+                password: state.authConfig.password ?? '',
+                privateKey: '',
+                passphrase: ''
+              }
+            : state.authConfig;
       const newIdentity: IdentityConfig = identitySchema.parse({
         id: createIdentityId(),
         name: normalizedIdentityName,
         username: normalizedIdentityUsername,
-        authConfig: state.authConfig
+        authConfig: nextAuthConfig
       });
       identityId = newIdentity.id;
       nextIdentities = [...state.identities, newIdentity];
@@ -2667,9 +2959,13 @@ export const useHostStore = create<HostState>((set, get) => ({
       basicInfo: {
         ...state.basicInfo,
         name: normalizedHostName,
+        group: normalizedGroup,
         address: normalizedAddress,
         port: normalizedPort,
-        description: normalizedDescription
+        description: normalizedDescription,
+        protocol,
+        serialPath: normalizedSerialPath,
+        serialBaudRate: normalizedSerialBaudRate
       },
       identityId,
       advancedOptions: {

@@ -113,6 +113,74 @@ const redactKnownSyncDomainsInText = (input: string): string => {
   return output;
 };
 
+const redactEmailInText = (input: string): string => {
+  if (!input) {
+    return input;
+  }
+  return input.replace(/\b([A-Za-z0-9._%+-]{1,64})@([A-Za-z0-9.-]+\.[A-Za-z]{2,24})\b/g, (_raw, local: string, domain: string) => {
+    const localTrimmed = String(local ?? '').trim();
+    if (!localTrimmed) {
+      return `***@${domain}`;
+    }
+    if (localTrimmed.length <= 2) {
+      return `${localTrimmed[0] ?? '*'}***@${domain}`;
+    }
+    return `${localTrimmed.slice(0, 2)}***@${domain}`;
+  });
+};
+
+const redactBearerTokenInText = (input: string): string => {
+  if (!input) {
+    return input;
+  }
+  return input
+    .replace(/\b(Bearer)\s+[A-Za-z0-9\-._~+/]+=*/gi, '$1 **')
+    .replace(/\b(Authorization['"]?\s*[:=]\s*['"]?Bearer)\s+[A-Za-z0-9\-._~+/]+=*/gi, '$1 **');
+};
+
+const redactJWTLikeTokenInText = (input: string): string => {
+  if (!input) {
+    return input;
+  }
+  // JWT-like token: xxx.yyy.zzz with base64url-ish parts.
+  return input.replace(
+    /\b[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{8,}\b/g,
+    '**jwt**'
+  );
+};
+
+const redactSecretAssignmentsInText = (input: string): string => {
+  if (!input) {
+    return input;
+  }
+  return input
+    .replace(/\b(token|access_token|refresh_token|id_token|password|passphrase|private_key|secret|api_key|apikey)\b\s*[:=]\s*["']?([^"'\s,;]+)/gi, '$1=**')
+    .replace(/\b(github_pat_[A-Za-z0-9_]+|ghp_[A-Za-z0-9]+|sk-[A-Za-z0-9-_]+)/g, '**secret**');
+};
+
+const redactIPv4InText = (input: string): string => {
+  if (!input) {
+    return input;
+  }
+  return input.replace(/\b((?:\d{1,3}\.){3}\d{1,3})\b/g, (raw, ip: string) => {
+    const segments = String(ip).split('.');
+    if (segments.length !== 4) {
+      return raw;
+    }
+    return `${segments[0]}.${segments[1]}.*.*`;
+  });
+};
+
+const sanitizeSensitiveText = (input: string): string => {
+  let output = input;
+  output = redactEmailInText(output);
+  output = redactBearerTokenInText(output);
+  output = redactJWTLikeTokenInText(output);
+  output = redactSecretAssignmentsInText(output);
+  output = redactIPv4InText(output);
+  return output;
+};
+
 const normalizeDetail = (detail: unknown): string | undefined => {
   if (detail == null) {
     return undefined;
@@ -147,12 +215,14 @@ export const appendAppLog = (
       : shouldMask
         ? redactSyncDomainInText(normalizedDetailRaw)
         : redactKnownSyncDomainsInText(normalizedDetailRaw);
+  const finalMessage = sanitizeSensitiveText(normalizedMessage);
+  const finalDetail = normalizedDetail == null ? undefined : sanitizeSensitiveText(normalizedDetail);
 
   useAppLogStore.getState().appendLog({
     level,
     scope,
-    message: normalizedMessage,
-    detail: normalizedDetail
+    message: finalMessage,
+    detail: finalDetail
   });
 };
 

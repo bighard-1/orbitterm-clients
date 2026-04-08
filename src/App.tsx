@@ -26,7 +26,7 @@ import {
   type TerminalLayoutNode,
   type TerminalSplitPane
 } from './components/terminal/OrbitTerminal';
-import { MetricTrendChart, type MetricTrendPoint } from './components/terminal/MetricTrendChart';
+import type { MetricTrendPoint } from './components/terminal/MetricTrendChart';
 import { OrbitAiAssistant } from './components/terminal/OrbitAiAssistant';
 import { OrbitInspector } from './components/terminal/OrbitInspector';
 import { SnippetsPanel } from './components/terminal/SnippetsPanel';
@@ -78,7 +78,9 @@ import { buildHostKey } from './utils/hostKey';
 import { useI18n } from './i18n/useI18n';
 import { detectMobileFormFactor, isAndroidRuntime } from './services/runtime';
 import { applyMobileOrientationMode } from './services/mobileOrientation';
+import { triggerMobileHaptic } from './services/mobileHaptics';
 import { appendSnippetToDraft } from './services/snippetWorkflow';
+import type { HostProtocol } from './types/host';
 const appWindow = getCurrentWebviewWindow();
 
 type DashboardSection = 'hosts' | 'terminal';
@@ -126,11 +128,11 @@ interface TerminalPerfSummary {
 }
 
 const toolbarButtonClass =
-  'rounded-lg border border-slate-300 bg-white/90 px-2.5 py-1 text-[11px] font-medium text-slate-800 hover:bg-white disabled:cursor-not-allowed disabled:opacity-55';
+  'rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/68 px-2.5 py-1 text-[10px] font-medium text-slate-200 hover:bg-slate-800/74 disabled:cursor-not-allowed disabled:opacity-55';
 const darkPanelButtonClass =
-  'ot-compact-hit rounded-lg border border-[#5a79a8] bg-[#0f1726] px-2 py-[1px] text-[11px] leading-4 font-medium text-[#d7e5ff] hover:bg-[#13203a]';
+  'ot-compact-hit rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/80 px-2 py-[1px] text-[10px] leading-4 font-medium text-slate-200 hover:bg-slate-800/86';
 const compactDarkPanelButtonClass =
-  'ot-compact-hit h-[18px] rounded-md border border-[#5a79a8] bg-[#0f1726] px-2 py-0 text-[11px] leading-[1] font-medium text-[#d7e5ff] hover:bg-[#13203a]';
+  'ot-compact-hit h-[18px] rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/80 px-2 py-0 text-[10px] leading-[1] font-medium text-slate-200 hover:bg-slate-800/86';
 const SFTP_PANEL_MIN_WIDTH = 280;
 const SFTP_PANEL_MAX_WIDTH = 680;
 const IDLE_RELEASE_CHECK_MS = 5 * 60 * 1000;
@@ -146,6 +148,8 @@ const TERMINAL_INPUT_MAX_BUFFER_CHARS = 8192;
 const PERF_STATS_FLUSH_MS = 1000;
 const MOBILE_SESSION_SWIPE_THRESHOLD_PX = 72;
 const MOBILE_SESSION_SWIPE_MAX_Y_DRIFT = 60;
+const HOST_ROW_SWIPE_THRESHOLD_PX = 64;
+const HOST_PULL_REFRESH_THRESHOLD_PX = 72;
 const AUTO_RECONNECT_WAIT_ONLINE_MS = 20_000;
 const TERMINAL_DRAFT_HISTORY_LIMIT = 120;
 const CWD_CHANGE_COMMAND_PATTERN =
@@ -155,11 +159,15 @@ const SETTINGS_SECTION_CATEGORY_MAP: Record<string, SettingsCategory> = {
   'settings-font': 'settings',
   'settings-acrylic': 'settings',
   'settings-theme': 'settings',
+  'settings-language': 'settings',
+  'settings-accessibility': 'settings',
   'settings-security': 'settings',
+  'settings-diagnostics': 'settings',
   'settings-identity': 'files',
   'settings-sync': 'profile',
   'settings-sync-license': 'profile',
   'settings-devices': 'profile',
+  'settings-ssh-keys': 'profile',
   'settings-about': 'other'
 };
 
@@ -835,6 +843,29 @@ const formatLatency = (latencyMs?: number | null): string => {
   return `${(latencyMs / 1000).toFixed(2)} s`;
 };
 
+const resolveMetricProgressPercent = (key: MetricCardKey, status?: SessionSysStatus | null): number => {
+  if (!status) {
+    return 0;
+  }
+  if (key === 'cpu') {
+    return clampPercent(status.cpuUsagePercent);
+  }
+  if (key === 'memory') {
+    return clampPercent(status.memoryUsagePercent);
+  }
+  if (key === 'rx') {
+    const rx = Number.isFinite(status.netRxBytesPerSec) ? Math.max(0, status.netRxBytesPerSec) : 0;
+    return clampPercent((rx / (8 * 1024 * 1024)) * 100);
+  }
+  if (key === 'tx') {
+    const tx = Number.isFinite(status.netTxBytesPerSec) ? Math.max(0, status.netTxBytesPerSec) : 0;
+    return clampPercent((tx / (8 * 1024 * 1024)) * 100);
+  }
+  const latency =
+    typeof status.latencyMs === 'number' && Number.isFinite(status.latencyMs) ? Math.max(0, status.latencyMs) : 0;
+  return clampPercent((latency / 350) * 100);
+};
+
 const resolveTagMicroIcon = (tag: string): string => {
   const normalized = tag.trim().toLowerCase();
   if (!normalized) {
@@ -856,6 +887,27 @@ const resolveTagMicroIcon = (tag: string): string => {
     return '🌐';
   }
   return '🏷';
+};
+
+const resolveProtocolLabel = (protocol: HostProtocol, locale: string): string => {
+  if (locale === 'en-US') {
+    if (protocol === 'telnet') return 'Telnet';
+    if (protocol === 'serial') return 'Serial';
+    return 'SSH';
+  }
+  if (locale === 'ja-JP') {
+    if (protocol === 'telnet') return 'Telnet';
+    if (protocol === 'serial') return 'シリアル';
+    return 'SSH';
+  }
+  if (locale === 'zh-TW') {
+    if (protocol === 'telnet') return 'Telnet';
+    if (protocol === 'serial') return '串口';
+    return 'SSH';
+  }
+  if (protocol === 'telnet') return 'Telnet';
+  if (protocol === 'serial') return '串口';
+  return 'SSH';
 };
 
 const scoreSearchField = (query: string, rawValue: string): number => {
@@ -934,11 +986,32 @@ const PALETTE_SETTINGS_ENTRIES: ReadonlyArray<PaletteSettingEntry> = [
     sectionId: 'settings-theme'
   },
   {
+    id: 'settings-language',
+    title: '设置 · 界面语言',
+    subtitle: '切换简中 / 繁中 / English / 日本語',
+    keywords: ['语言', 'language', 'i18n', 'english', 'japanese'],
+    sectionId: 'settings-language'
+  },
+  {
+    id: 'settings-accessibility',
+    title: '设置 · 无障碍',
+    subtitle: '缩放、对比度与视觉可读性',
+    keywords: ['无障碍', '缩放', '对比度', 'a11y'],
+    sectionId: 'settings-accessibility'
+  },
+  {
     id: 'settings-security',
     title: '设置 · 安全',
     subtitle: '自动锁定时长与安全策略',
     keywords: ['安全', '锁定', 'auto lock', 'vault'],
     sectionId: 'settings-security'
+  },
+  {
+    id: 'settings-diagnostics',
+    title: '设置 · 环境诊断',
+    subtitle: '健康检查、同步自修复与日志定位',
+    keywords: ['诊断', 'health check', 'self-heal', '同步异常'],
+    sectionId: 'settings-diagnostics'
   },
   {
     id: 'settings-identity',
@@ -960,6 +1033,13 @@ const PALETTE_SETTINGS_ENTRIES: ReadonlyArray<PaletteSettingEntry> = [
     subtitle: '查看在线设备与一键退出',
     keywords: ['设备', '登录设备', 'device', 'logout'],
     sectionId: 'settings-devices'
+  },
+  {
+    id: 'settings-ssh-keys',
+    title: '设置 · SSH 密钥轮换',
+    subtitle: '轮换密钥、撤销密钥、过期管理',
+    keywords: ['ssh', 'rotate', 'revoke', 'fingerprint', '密钥轮换'],
+    sectionId: 'settings-ssh-keys'
   },
   {
     id: 'settings-about',
@@ -988,6 +1068,7 @@ function App(): JSX.Element {
   const [mobileNavTab, setMobileNavTab] = useState<MobileNavTab>('hosts');
   const [isHostFilterDrawerOpen, setIsHostFilterDrawerOpen] = useState<boolean>(false);
   const [hostSearchQuery, setHostSearchQuery] = useState<string>('');
+  const [activeGroupFilter, setActiveGroupFilter] = useState<string>('all');
   const [activeTagFilter, setActiveTagFilter] = useState<string>('all');
   const [highlightedSearchIndex, setHighlightedSearchIndex] = useState<number>(0);
   const [isHostWizardOpen, setIsHostWizardOpen] = useState<boolean>(false);
@@ -1021,6 +1102,7 @@ function App(): JSX.Element {
   const [terminalDraftHistoryCursor, setTerminalDraftHistoryCursor] = useState<number>(-1);
   const [terminalDraftSnapshot, setTerminalDraftSnapshot] = useState<string>('');
   const [isDraftHistoryOpen, setIsDraftHistoryOpen] = useState<boolean>(false);
+  const [isDesktopCommandBarVisible, setIsDesktopCommandBarVisible] = useState<boolean>(false);
   const [isMobileTerminalToolsExpanded, setIsMobileTerminalToolsExpanded] = useState<boolean>(false);
   const [isMobileMetricsExpanded, setIsMobileMetricsExpanded] = useState<boolean>(false);
   const [isMobilePortraitKeyboardInputEnabled, setIsMobilePortraitKeyboardInputEnabled] =
@@ -1038,6 +1120,14 @@ function App(): JSX.Element {
   const [deployingHostId, setDeployingHostId] = useState<string | null>(null);
   const [selectedHostIds, setSelectedHostIds] = useState<Set<string>>(() => new Set());
   const [isBatchDeploying, setIsBatchDeploying] = useState<boolean>(false);
+  const [isMobileHostManageOpen, setIsMobileHostManageOpen] = useState<boolean>(false);
+  const [mobileSwipeHostId, setMobileSwipeHostId] = useState<string | null>(null);
+  const [hostPullDistance, setHostPullDistance] = useState<number>(0);
+  const [isHostPullRefreshing, setIsHostPullRefreshing] = useState<boolean>(false);
+  const [isHostListBootstrapping, setIsHostListBootstrapping] = useState<boolean>(false);
+  const [isMobileTerminalSheetOpen, setIsMobileTerminalSheetOpen] = useState<boolean>(false);
+  const [mobileCtrlModifierEnabled, setMobileCtrlModifierEnabled] = useState<boolean>(false);
+  const [mobileAltModifierEnabled, setMobileAltModifierEnabled] = useState<boolean>(false);
   const [profileDraftAutoPathSync, setProfileDraftAutoPathSync] = useState<boolean>(true);
   const [profileDraftCloseAction, setProfileDraftCloseAction] = useState<CloseWindowAction>('ask');
   const [terminalPerfSummary, setTerminalPerfSummary] = useState<TerminalPerfSummary>({
@@ -1079,6 +1169,9 @@ function App(): JSX.Element {
   const syncPushToCloud = useHostStore((state) => state.syncPushToCloud);
   const refreshCloudSyncPolicy = useHostStore((state) => state.refreshCloudSyncPolicy);
   const refreshCloudLicenseStatus = useHostStore((state) => state.refreshCloudLicenseStatus);
+  const refreshCloudUser2FAStatus = useHostStore((state) => state.refreshCloudUser2FAStatus);
+  const loadCloudDevices = useHostStore((state) => state.loadCloudDevices);
+  const loadCloudSSHKeys = useHostStore((state) => state.loadCloudSSHKeys);
   const reset = useHostStore((state) => state.reset);
   const lockVault = useHostStore((state) => state.lockVault);
   const updateHostAndIdentity = useHostStore((state) => state.updateHostAndIdentity);
@@ -1465,6 +1558,27 @@ function App(): JSX.Element {
     }
     return activeSessions.find((session) => session.id === activeSessionId)?.hostId ?? null;
   }, [activeSessionId, activeSessions, splitWorkspaces]);
+  const activeTerminalHost = useMemo(() => {
+    if (!activeTerminalHostId) {
+      return null;
+    }
+    return hosts.find((host) => buildHostKey(host) === activeTerminalHostId) ?? null;
+  }, [activeTerminalHostId, hosts]);
+  const isProductionSession = useMemo(() => {
+    if (!activeTerminalHost) {
+      return false;
+    }
+    const keywordPattern = /(production|prod|生产环境|正式环境|生產環境|本番)/i;
+    const tags = activeTerminalHost.advancedOptions.tags ?? [];
+    if (tags.some((tag) => keywordPattern.test(tag))) {
+      return true;
+    }
+    const hostName = activeTerminalHost.basicInfo.name ?? '';
+    const hostDescription = activeTerminalHost.basicInfo.description ?? '';
+    return keywordPattern.test(`${hostName} ${hostDescription}`);
+  }, [activeTerminalHost]);
+  const activeTerminalProtocol = activeTerminalHost?.basicInfo.protocol ?? 'ssh';
+  const isActiveSessionSsh = activeTerminalProtocol === 'ssh';
   const activeTerminalTitle = useMemo(() => {
     if (!activeSessionId) {
       return null;
@@ -1623,15 +1737,6 @@ function App(): JSX.Element {
     if (mobileNavTab === 'sessions') {
       return uiText.navTerminal;
     }
-    if (mobileNavTab === 'tools') {
-      return locale === 'zh-CN'
-        ? '工具'
-        : locale === 'zh-TW'
-          ? '工具'
-          : locale === 'ja-JP'
-            ? 'ツール'
-            : 'Tools';
-    }
     return locale === 'zh-CN'
       ? '设置'
       : locale === 'zh-TW'
@@ -1647,11 +1752,12 @@ function App(): JSX.Element {
     activeSessions.length > 0 &&
     !isSettingsOpen;
   const mobileTopActionButtonClass = isMobileRuntime
-    ? 'ot-compact-hit h-[18px] rounded border border-[#5a79a8] bg-[#0f1726] px-2 py-0 text-[11px] leading-[1] font-medium text-[#d7e5ff] hover:bg-[#13203a]'
+    ? 'inline-flex h-9 min-w-9 items-center gap-1 rounded-[var(--radius)] border border-[#4a6791] bg-[#0e1624] px-2 text-[11px] font-semibold text-[#d7e5ff] hover:bg-[#152238]'
     : darkPanelButtonClass;
   const terminalDraftActionButtonClass = isMobileRuntime
-    ? 'ot-compact-hit h-9 rounded-md border border-[#5a79a8] bg-[#0f1726] px-3 py-0 text-[12px] leading-[1] font-semibold text-[#d7e5ff] hover:bg-[#13203a]'
+    ? 'h-11 rounded-[var(--radius)] border border-[#4b6995] bg-[#0f1726] px-3 py-0 text-[12px] font-semibold text-[#d7e5ff] hover:bg-[#15263d]'
     : darkPanelButtonClass;
+  const shouldShowTerminalCommandBar = isMobileRuntime || isDesktopCommandBarVisible;
   const allowPreInputKeyboard = !isMobileRuntime || isMobilePortraitKeyboardInputEnabled;
   const draftHistoryPreview = useMemo(() => {
     return [...terminalDraftHistory].slice(-12).reverse();
@@ -1672,7 +1778,15 @@ function App(): JSX.Element {
   const terminalSplitRef = useRef<HTMLElement | null>(null);
   const syncIndicatorRef = useRef<HTMLDivElement | null>(null);
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
+  const mobileHostManageRef = useRef<HTMLDivElement | null>(null);
   const hostSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const hostListScrollRef = useRef<HTMLDivElement | null>(null);
+  const wasHostSectionVisibleRef = useRef<boolean>(false);
+  const dangerousActionExpiresAtRef = useRef<Map<string, number>>(new Map());
+  const mobileHostSwipeStartXRef = useRef<number | null>(null);
+  const mobileHostSwipeStartYRef = useRef<number | null>(null);
+  const mobileHostSwipeTrackingIdRef = useRef<string | null>(null);
+  const hostPullStartYRef = useRef<number | null>(null);
   const splitWorkspacesRef = useRef<Record<string, TabSplitWorkspace>>(splitWorkspaces);
   const manualDetachedClosingRef = useRef<Set<string>>(new Set());
   const allowWindowCloseRef = useRef<boolean>(false);
@@ -1747,9 +1861,25 @@ function App(): JSX.Element {
       .sort((a, b) => a.tag.localeCompare(b.tag, 'zh-CN'));
   }, [hosts]);
 
+  const groupStats = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const host of hosts) {
+      const group = host.basicInfo.group?.trim() || '未分组';
+      const prev = map.get(group) ?? 0;
+      map.set(group, prev + 1);
+    }
+    return Array.from(map.entries())
+      .map(([group, count]) => ({ group, count }))
+      .sort((a, b) => a.group.localeCompare(b.group, 'zh-CN'));
+  }, [hosts]);
+
   const filteredHosts = useMemo(() => {
     const query = hostSearchQuery.trim().toLowerCase();
     return hosts.filter((host) => {
+      const hostGroup = host.basicInfo.group?.trim() || '未分组';
+      if (activeGroupFilter !== 'all' && hostGroup !== activeGroupFilter) {
+        return false;
+      }
       if (activeTagFilter !== 'all' && !host.advancedOptions.tags.includes(activeTagFilter)) {
         return false;
       }
@@ -1758,18 +1888,30 @@ function App(): JSX.Element {
       }
       const searchable = [
         host.basicInfo.name,
+        host.basicInfo.group ?? '',
         host.basicInfo.address,
+        host.basicInfo.protocol ?? 'ssh',
+        host.basicInfo.serialPath ?? '',
         ...host.advancedOptions.tags
       ]
         .join(' ')
         .toLowerCase();
       return searchable.includes(query);
     });
-  }, [activeTagFilter, hostSearchQuery, hosts]);
+  }, [activeGroupFilter, activeTagFilter, hostSearchQuery, hosts]);
 
   const filteredHostIds = useMemo(() => {
     return filteredHosts.map((host) => buildHostKey(host));
   }, [filteredHosts]);
+
+  useEffect(() => {
+    if (activeGroupFilter === 'all') {
+      return;
+    }
+    if (!groupStats.some((item) => item.group === activeGroupFilter)) {
+      setActiveGroupFilter('all');
+    }
+  }, [activeGroupFilter, groupStats]);
 
   const selectedHostCount = useMemo(() => {
     return Array.from(selectedHostIds).filter((hostId) => hosts.some((host) => buildHostKey(host) === hostId))
@@ -1839,12 +1981,6 @@ function App(): JSX.Element {
         setDashboardSection('terminal');
         return;
       }
-      if (tab === 'tools') {
-        setIsSettingsOpen(false);
-        setDashboardSection('terminal');
-        setIsMobileTerminalToolsExpanded(true);
-        return;
-      }
       setIsMobileTerminalToolsExpanded(false);
       openSettingsCategory('settings');
     },
@@ -1874,8 +2010,8 @@ function App(): JSX.Element {
       setMobileNavTab('hosts');
       return;
     }
-    setMobileNavTab(isMobileTerminalToolsExpanded ? 'tools' : 'sessions');
-  }, [dashboardSection, isMobileRuntime, isSettingsOpen, isMobileTerminalToolsExpanded]);
+    setMobileNavTab('sessions');
+  }, [dashboardSection, isMobileRuntime, isSettingsOpen]);
 
   useEffect(() => {
     if (!isMobileRuntime || dashboardSection === 'terminal') {
@@ -1911,6 +2047,94 @@ function App(): JSX.Element {
     setCloseWindowAction
   ]);
 
+  const handleRefreshHostList = useCallback(async (): Promise<void> => {
+    if (isHostPullRefreshing) {
+      return;
+    }
+    setIsHostPullRefreshing(true);
+    try {
+      if (cloudSyncSession) {
+        await refreshCloudSyncPolicy({ silent: true });
+        await syncPullFromCloud({ source: 'manual', force: false });
+      }
+      toast.success(
+        locale === 'en-US'
+          ? 'Host list refreshed.'
+          : locale === 'ja-JP'
+            ? 'ホスト一覧を更新しました。'
+            : locale === 'zh-TW'
+              ? '主機清單已更新。'
+              : '主机列表已刷新。'
+      );
+    } catch (error) {
+      const fallback =
+        locale === 'en-US'
+          ? 'Refresh failed.'
+          : locale === 'ja-JP'
+            ? '更新に失敗しました。'
+            : locale === 'zh-TW'
+              ? '刷新失敗。'
+              : '刷新失败。';
+      const message = error instanceof Error ? error.message : fallback;
+      toast.error(message || fallback);
+    } finally {
+      window.setTimeout(() => {
+        setHostPullDistance(0);
+        setIsHostPullRefreshing(false);
+      }, 120);
+    }
+  }, [cloudSyncSession, isHostPullRefreshing, locale, refreshCloudSyncPolicy, syncPullFromCloud]);
+
+  const handleHostListTouchStart = useCallback((event: ReactTouchEvent<HTMLDivElement>): void => {
+    if (!isMobileRuntime) {
+      return;
+    }
+    const root = hostListScrollRef.current;
+    if (!root || root.scrollTop > 0) {
+      hostPullStartYRef.current = null;
+      return;
+    }
+    const touch = event.touches[0];
+    hostPullStartYRef.current = touch ? touch.clientY : null;
+  }, [isMobileRuntime]);
+
+  const handleHostListTouchMove = useCallback((event: ReactTouchEvent<HTMLDivElement>): void => {
+    if (!isMobileRuntime || isHostPullRefreshing) {
+      return;
+    }
+    const startY = hostPullStartYRef.current;
+    if (startY === null) {
+      return;
+    }
+    const touch = event.touches[0];
+    if (!touch) {
+      return;
+    }
+    const deltaY = touch.clientY - startY;
+    if (deltaY <= 0) {
+      setHostPullDistance(0);
+      return;
+    }
+    const root = hostListScrollRef.current;
+    if (root && root.scrollTop > 0) {
+      setHostPullDistance(0);
+      return;
+    }
+    setHostPullDistance(Math.min(HOST_PULL_REFRESH_THRESHOLD_PX + 28, deltaY * 0.55));
+  }, [isHostPullRefreshing, isMobileRuntime]);
+
+  const handleHostListTouchEnd = useCallback((): void => {
+    if (!isMobileRuntime) {
+      return;
+    }
+    hostPullStartYRef.current = null;
+    if (hostPullDistance >= HOST_PULL_REFRESH_THRESHOLD_PX) {
+      void handleRefreshHostList();
+      return;
+    }
+    setHostPullDistance(0);
+  }, [handleRefreshHostList, hostPullDistance, isMobileRuntime]);
+
   const commandPaletteRuntimeItems = useMemo<PaletteRuntimeItem[]>(() => {
     if (appView !== 'dashboard') {
       return [];
@@ -1926,7 +2150,10 @@ function App(): JSX.Element {
       const identity = identityById.get(host.identityId);
       const textScore = scoreSearchFields(query, [
         host.basicInfo.name,
+        host.basicInfo.group ?? '',
         host.basicInfo.address,
+        host.basicInfo.protocol ?? 'ssh',
+        host.basicInfo.serialPath ?? '',
         String(host.basicInfo.port),
         host.basicInfo.description,
         identity?.name ?? '',
@@ -1947,8 +2174,12 @@ function App(): JSX.Element {
         : 0;
       const noQueryBase = query ? 0 : 120;
       const score = textScore + usageCountBoost + recencyBoost + noQueryBase;
+      const hostProtocol = host.basicInfo.protocol ?? 'ssh';
       const hostTitle = host.basicInfo.name || `${host.basicInfo.address}:${host.basicInfo.port}`;
-      const hostSubtitle = `${identity?.username ?? 'unknown'}@${host.basicInfo.address}:${host.basicInfo.port}`;
+      const hostSubtitle =
+        hostProtocol === 'serial'
+          ? `${resolveProtocolLabel(hostProtocol, locale)} · ${host.basicInfo.serialPath || 'serial-device'}`
+          : `${resolveProtocolLabel(hostProtocol, locale)} · ${identity?.username ?? 'unknown'}@${host.basicInfo.address}:${host.basicInfo.port}`;
       results.push({
         id: `host:${hostId}`,
         kind: 'host',
@@ -1957,6 +2188,10 @@ function App(): JSX.Element {
         hint: usage ? `连接 ${usage.count} 次` : '一键连接',
         score,
         execute: async () => {
+          if (hostProtocol === 'serial' && isMobileRuntime) {
+            toast.error('移动端暂不支持本地串口连接，请在桌面端使用 Serial。');
+            return;
+          }
           const success = await openTerminal(host);
           if (success) {
             setDashboardSection('terminal');
@@ -2063,6 +2298,64 @@ function App(): JSX.Element {
         }
       },
       {
+        id: 'action:health-check',
+        title: '执行环境健康检查',
+        subtitle: '检测网络、数据目录、WebView 运行时',
+        keywords: ['健康检查', '诊断', 'health', 'runtime'],
+        execute: () => {
+          void (async () => {
+            try {
+              const report = await runHealthCheck();
+              setHealthReport(report);
+              const issues = report.items.filter((item) => item.status !== 'ok');
+              if (issues.length > 0) {
+                const firstIssue = issues[0];
+                if (firstIssue) {
+                  toast.warning(`环境检测提示：${firstIssue.label}`, {
+                    description: firstIssue.suggestion ?? firstIssue.message
+                  });
+                }
+              } else {
+                toast.success('环境健康检查通过');
+              }
+            } catch (error) {
+              const fallback = '环境健康检查失败，请检查系统权限或网络。';
+              const message = error instanceof Error ? error.message : fallback;
+              toast.warning(message || fallback);
+            }
+          })();
+        }
+      },
+      {
+        id: 'action:sync-self-heal',
+        title: '执行同步自修复',
+        subtitle: '刷新策略并强制拉取云端状态',
+        keywords: ['同步', '修复', 'self heal', 'cloud sync'],
+        execute: () => {
+          void (async () => {
+            if (!cloudSyncSession || appView !== 'dashboard') {
+              toast.error('请先登录同步账号并进入仪表盘后再执行。');
+              return;
+            }
+            try {
+              await refreshCloudSyncPolicy({ silent: true });
+              await Promise.all([
+                syncPullFromCloud({ source: 'manual', force: true }),
+                refreshCloudLicenseStatus({ silent: true }),
+                refreshCloudUser2FAStatus(),
+                loadCloudDevices(),
+                loadCloudSSHKeys()
+              ]);
+              toast.success('同步自修复已完成。');
+            } catch (error) {
+              const fallback = '同步自修复失败，请稍后重试。';
+              const message = error instanceof Error ? error.message : fallback;
+              toast.error(message || fallback);
+            }
+          })();
+        }
+      },
+      {
         id: 'action:lock',
         title: '立即锁定金库',
         subtitle: '快速回到解锁界面',
@@ -2094,17 +2387,26 @@ function App(): JSX.Element {
   }, [
     activeTerminalSessionId,
     appView,
+    cloudSyncSession,
     commandPaletteQuery,
     hostUsageStats,
     hosts,
     identities,
+    loadCloudDevices,
+    loadCloudSSHKeys,
     lockVault,
     openSettingsSection,
     openTerminal,
+    refreshCloudLicenseStatus,
+    refreshCloudSyncPolicy,
+    refreshCloudUser2FAStatus,
     recordHostConnection,
     reset,
     setTerminalError,
-    snippets
+    snippets,
+    syncPullFromCloud,
+    locale,
+    isMobileRuntime
   ]);
 
   const commandPaletteItems = useMemo<CommandPaletteItem[]>(() => {
@@ -2169,6 +2471,29 @@ function App(): JSX.Element {
     }
   };
 
+  const runSyncSelfHeal = useCallback(async (): Promise<void> => {
+    if (!cloudSyncSession || appView !== 'dashboard') {
+      throw new Error('请先登录同步账号并进入仪表盘后再执行。');
+    }
+    await refreshCloudSyncPolicy({ silent: true });
+    await Promise.all([
+      syncPullFromCloud({ source: 'manual', force: true }),
+      refreshCloudLicenseStatus({ silent: true }),
+      refreshCloudUser2FAStatus(),
+      loadCloudDevices(),
+      loadCloudSSHKeys()
+    ]);
+  }, [
+    appView,
+    cloudSyncSession,
+    loadCloudDevices,
+    loadCloudSSHKeys,
+    refreshCloudLicenseStatus,
+    refreshCloudSyncPolicy,
+    refreshCloudUser2FAStatus,
+    syncPullFromCloud
+  ]);
+
   useEffect(() => {
     void performHealthCheck(false);
   }, []);
@@ -2227,6 +2552,18 @@ function App(): JSX.Element {
           hostSearchInputRef.current?.focus();
           hostSearchInputRef.current?.select();
         }, 0);
+        return;
+      }
+
+      if (key === 'b' && activeTerminalSessionId && isActiveSessionSsh) {
+        event.preventDefault();
+        setIsSftpCollapsed((prev) => !prev);
+        return;
+      }
+
+      if (key === 'j' && dashboardSection === 'terminal') {
+        event.preventDefault();
+        setIsDesktopCommandBarVisible((prev) => !prev);
       }
     };
 
@@ -2234,7 +2571,17 @@ function App(): JSX.Element {
     return () => {
       window.removeEventListener('keydown', handler);
     };
-  }, [appView, closeTerminal, isCommandPaletteOpen, isMobileLayout, isSettingsOpen, openSettingsCategory]);
+  }, [
+    activeTerminalSessionId,
+    appView,
+    dashboardSection,
+    closeTerminal,
+    isActiveSessionSsh,
+    isCommandPaletteOpen,
+    isMobileLayout,
+    isSettingsOpen,
+    openSettingsCategory
+  ]);
 
   useEffect(() => {
     if (activeTagFilter === 'all') {
@@ -2277,8 +2624,24 @@ function App(): JSX.Element {
   useEffect(() => {
     if (!activeTerminalSessionId) {
       setIsMetricDetailOpen(false);
+      if (!isMobileRuntime) {
+        setIsDesktopCommandBarVisible(false);
+      }
     }
-  }, [activeTerminalSessionId]);
+  }, [activeTerminalSessionId, isMobileRuntime]);
+
+  useEffect(() => {
+    if (dashboardSection !== 'hosts') {
+      setIsMobileHostManageOpen(false);
+      setMobileSwipeHostId(null);
+      setHostPullDistance(0);
+    }
+    if (dashboardSection !== 'terminal') {
+      setIsMobileTerminalSheetOpen(false);
+      setMobileCtrlModifierEnabled(false);
+      setMobileAltModifierEnabled(false);
+    }
+  }, [dashboardSection]);
 
   useEffect(() => {
     if (autoSftpPathSyncEnabled) {
@@ -2666,6 +3029,46 @@ function App(): JSX.Element {
       setIsProfileMenuOpen(false);
     }
   }, [isSettingsOpen]);
+
+  useEffect(() => {
+    if (!isMobileHostManageOpen) {
+      return;
+    }
+    const handlePointerDown = (event: PointerEvent): void => {
+      const root = mobileHostManageRef.current;
+      if (!root) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (!root.contains(target)) {
+        setIsMobileHostManageOpen(false);
+      }
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [isMobileHostManageOpen]);
+
+  useEffect(() => {
+    if (!isMobileRuntime) {
+      return;
+    }
+    if (dashboardSection !== 'hosts') {
+      setIsMobileHostManageOpen(false);
+      setMobileSwipeHostId(null);
+      setHostPullDistance(0);
+      setIsHostPullRefreshing(false);
+    }
+    if (dashboardSection !== 'terminal') {
+      setIsMobileTerminalSheetOpen(false);
+      setMobileCtrlModifierEnabled(false);
+      setMobileAltModifierEnabled(false);
+    }
+  }, [dashboardSection, isMobileRuntime]);
 
   useEffect(() => {
     const bootstrapDiscover = (): void => {
@@ -3148,6 +3551,46 @@ function App(): JSX.Element {
     };
   }, [appView, isMobileRuntime, lockVault, mobileBiometricEnabled]);
 
+  useEffect(() => {
+    const isHostsSectionVisible = appView === 'dashboard' && dashboardSection === 'hosts';
+    if (!isHostsSectionVisible) {
+      setIsHostListBootstrapping(false);
+      wasHostSectionVisibleRef.current = false;
+      return;
+    }
+    if (wasHostSectionVisibleRef.current) {
+      return;
+    }
+    wasHostSectionVisibleRef.current = true;
+    setIsHostListBootstrapping(true);
+    const timerId = window.setTimeout(() => {
+      setIsHostListBootstrapping(false);
+    }, 420);
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [appView, dashboardSection]);
+
+  const requestDangerousActionConfirm = useCallback(
+    (actionKey: string, actionLabel: string): boolean => {
+      if (!isMobileRuntime) {
+        return true;
+      }
+      const now = Date.now();
+      const expiresAt = dangerousActionExpiresAtRef.current.get(actionKey) ?? 0;
+      if (expiresAt > now) {
+        dangerousActionExpiresAtRef.current.delete(actionKey);
+        void triggerMobileHaptic('heavy');
+        return true;
+      }
+      dangerousActionExpiresAtRef.current.set(actionKey, now + 2600);
+      toast.message(`再次点击以确认${actionLabel}`);
+      void triggerMobileHaptic('warning');
+      return false;
+    },
+    [isMobileRuntime]
+  );
+
   const sendCommandToTerminal = async (command: string, execute = false): Promise<void> => {
     if (!command.trim()) {
       return;
@@ -3317,6 +3760,53 @@ function App(): JSX.Element {
     terminalTouchStateRef.current = null;
   }, []);
 
+  const handleHostRowTouchStart = useCallback(
+    (event: ReactTouchEvent<HTMLElement>, hostId: string): void => {
+      if (!isMobileRuntime) {
+        return;
+      }
+      const touch = event.touches[0];
+      if (!touch) {
+        return;
+      }
+      mobileHostSwipeStartXRef.current = touch.clientX;
+      mobileHostSwipeStartYRef.current = touch.clientY;
+      mobileHostSwipeTrackingIdRef.current = hostId;
+    },
+    [isMobileRuntime]
+  );
+
+  const handleHostRowTouchEnd = useCallback(
+    (event: ReactTouchEvent<HTMLElement>, hostId: string): void => {
+      if (!isMobileRuntime) {
+        return;
+      }
+      const touch = event.changedTouches[0];
+      const startX = mobileHostSwipeStartXRef.current;
+      const startY = mobileHostSwipeStartYRef.current;
+      const trackingId = mobileHostSwipeTrackingIdRef.current;
+      mobileHostSwipeStartXRef.current = null;
+      mobileHostSwipeStartYRef.current = null;
+      mobileHostSwipeTrackingIdRef.current = null;
+      if (!touch || startX === null || startY === null || trackingId !== hostId) {
+        return;
+      }
+      const deltaX = touch.clientX - startX;
+      const deltaY = Math.abs(touch.clientY - startY);
+      if (deltaY > 42) {
+        return;
+      }
+      if (deltaX <= -HOST_ROW_SWIPE_THRESHOLD_PX) {
+        setMobileSwipeHostId(hostId);
+        return;
+      }
+      if (deltaX >= 24) {
+        setMobileSwipeHostId(null);
+      }
+    },
+    [isMobileRuntime]
+  );
+
   const mobileVirtualKeys = useMemo<
     Array<{
       id: string;
@@ -3376,6 +3866,7 @@ function App(): JSX.Element {
       }
       try {
         await sendRawInputToTerminal(payload);
+        void triggerMobileHaptic('light');
       } catch (error) {
         const fallback =
           locale === 'en-US'
@@ -3392,6 +3883,48 @@ function App(): JSX.Element {
     [activeTerminalSessionId, locale, sendRawInputToTerminal]
   );
 
+  const handleSendMobileAccessoryKey = useCallback(
+    async (key: 'tab' | 'esc' | 'left' | 'up' | 'down' | 'right' | 'ctrl' | 'alt'): Promise<void> => {
+      if (key === 'ctrl') {
+        setMobileCtrlModifierEnabled((prev) => !prev);
+        void triggerMobileHaptic('light');
+        return;
+      }
+      if (key === 'alt') {
+        setMobileAltModifierEnabled((prev) => !prev);
+        void triggerMobileHaptic('light');
+        return;
+      }
+      const payloadMap: Record<'tab' | 'esc' | 'left' | 'up' | 'down' | 'right', string> = {
+        tab: '\t',
+        esc: '\u001b',
+        left: '\u001b[D',
+        up: '\u001b[A',
+        down: '\u001b[B',
+        right: '\u001b[C'
+      };
+      let payload = payloadMap[key];
+      if (mobileCtrlModifierEnabled) {
+        if (key === 'left') {
+          payload = '\u001b[1;5D';
+        } else if (key === 'right') {
+          payload = '\u001b[1;5C';
+        } else if (key === 'up') {
+          payload = '\u001b[1;5A';
+        } else if (key === 'down') {
+          payload = '\u001b[1;5B';
+        }
+      }
+      if (mobileAltModifierEnabled) {
+        payload = `\u001b${payload}`;
+      }
+      await handleSendVirtualKey(payload);
+      setMobileCtrlModifierEnabled(false);
+      setMobileAltModifierEnabled(false);
+    },
+    [handleSendVirtualKey, mobileAltModifierEnabled, mobileCtrlModifierEnabled]
+  );
+
   const executeDraftCommand = async (): Promise<void> => {
     const normalized = terminalDraftCommand.replace(/\r\n/g, '\n').replace(/\n+$/g, '');
     if (!normalized.trim()) {
@@ -3404,6 +3937,7 @@ function App(): JSX.Element {
     const payload = `${normalized}\n`;
     try {
       await sendRawInputToTerminal(payload);
+      void triggerMobileHaptic('medium');
       setTerminalDraftHistory((prev) => {
         const deduped = prev.filter((item) => item !== historyEntry);
         const next = [...deduped, historyEntry];
@@ -3429,6 +3963,7 @@ function App(): JSX.Element {
       if (!next) {
         terminalPreInputRef.current?.blur();
       }
+      void triggerMobileHaptic('light');
       return next;
     });
   }, []);
@@ -3452,6 +3987,10 @@ function App(): JSX.Element {
       toast.error('请先建立终端连接后再查看主机信息。');
       return;
     }
+    if (!isActiveSessionSsh) {
+      toast.message('当前连接协议不支持主机信息读取（仅 SSH 可用）。');
+      return;
+    }
     setIsHostInfoOpen(true);
     setIsLoadingHostInfo(true);
     setHostInfoError(null);
@@ -3466,7 +4005,7 @@ function App(): JSX.Element {
     } finally {
       setIsLoadingHostInfo(false);
     }
-  }, [activeTerminalSessionId]);
+  }, [activeTerminalSessionId, isActiveSessionSsh]);
 
   const requestSftpPathSync = useCallback(
     async (
@@ -3477,6 +4016,13 @@ function App(): JSX.Element {
       }
     ): Promise<void> => {
       if (!sessionId) {
+        return;
+      }
+      const session = activeSessions.find((item) => item.id === sessionId);
+      const sessionHost = session
+        ? hosts.find((host) => buildHostKey(host) === session.hostId)
+        : null;
+      if ((sessionHost?.basicInfo.protocol ?? 'ssh') !== 'ssh') {
         return;
       }
       if (sftpPathSyncInFlightRef.current.has(sessionId)) {
@@ -3511,7 +4057,7 @@ function App(): JSX.Element {
         sftpPathSyncInFlightRef.current.delete(sessionId);
       }
     },
-    []
+    [activeSessions, hosts]
   );
 
   const scheduleAutoSftpPathSync = useCallback(
@@ -3590,6 +4136,10 @@ function App(): JSX.Element {
       toast.error('请先建立终端会话，再执行路径同步。');
       return;
     }
+    if (!isActiveSessionSsh) {
+      toast.message('当前连接协议不支持路径同步（仅 SSH 可用）。');
+      return;
+    }
     if (isSyncingPath) {
       return;
     }
@@ -3644,19 +4194,48 @@ function App(): JSX.Element {
   };
 
   const handleDeleteHost = async (hostId: string, hostName: string): Promise<void> => {
-    const shouldDelete = window.confirm(`确认删除主机「${hostName}」吗？该操作会同步更新本地金库。`);
+    if (!requestDangerousActionConfirm(`delete-host:${hostId}`, '删除主机')) {
+      return;
+    }
+    const shouldDelete = isMobileRuntime
+      ? true
+      : window.confirm(`确认删除主机「${hostName}」吗？该操作会同步更新本地金库。`);
     if (!shouldDelete) {
       return;
     }
 
     try {
       await deleteHost(hostId);
+      void triggerMobileHaptic('success');
     } catch (error) {
       const fallback = '删除主机失败，请稍后重试。';
       const message = error instanceof Error ? error.message : fallback;
       toast.error(message || fallback);
+      void triggerMobileHaptic('error');
     }
   };
+
+  const handleCloseActiveTerminal = useCallback(async (): Promise<void> => {
+    if (!activeSessionId) {
+      return;
+    }
+    if (!requestDangerousActionConfirm(`close-active:${activeSessionId}`, '关闭当前会话')) {
+      return;
+    }
+    await closeTerminal();
+    void triggerMobileHaptic('light');
+  }, [activeSessionId, closeTerminal, requestDangerousActionConfirm]);
+
+  const handleCloseSessionTab = useCallback(
+    async (sessionId: string): Promise<void> => {
+      if (!requestDangerousActionConfirm(`close-tab:${sessionId}`, '关闭标签')) {
+        return;
+      }
+      await closeSession(sessionId);
+      void triggerMobileHaptic('light');
+    },
+    [closeSession, requestDangerousActionConfirm]
+  );
 
   const handleSaveHostEdit = async (values: HostEditFormValues): Promise<void> => {
     if (!editingHostId) {
@@ -3667,16 +4246,27 @@ function App(): JSX.Element {
       await updateHostAndIdentity(editingHostId, {
         basicInfo: {
           name: values.name,
+          group: values.group,
           address: values.address,
           port: values.port,
           description: values.description,
-          tagsText: values.tagsText
+          tagsText: values.tagsText,
+          protocol: values.protocol,
+          serialPath: values.serialPath,
+          serialBaudRate: values.serialBaudRate
         },
         identity: {
           name: values.identityName,
           username: values.identityUsername,
           authConfig:
-            values.method === 'password'
+            values.method === 'none'
+              ? {
+                  method: 'none',
+                  password: '',
+                  privateKey: '',
+                  passphrase: ''
+                }
+              : values.method === 'password'
               ? {
                   method: 'password',
                   password: values.password?.trim() ?? '',
@@ -3718,6 +4308,10 @@ function App(): JSX.Element {
       toast.error('未找到目标主机，请刷新后重试。');
       return;
     }
+    if ((target.basicInfo.protocol ?? 'ssh') === 'serial' && isMobileRuntime) {
+      toast.error('移动端暂不支持本地串口连接，请在桌面端使用 Serial。');
+      return;
+    }
 
     setConnectingHostId(hostId);
     try {
@@ -3726,6 +4320,7 @@ function App(): JSX.Element {
         setDashboardSection('terminal');
         recordHostConnection(hostId);
         setTerminalError(null);
+        void triggerMobileHaptic('success');
       }
     } finally {
       setConnectingHostId((current) => (current === hostId ? null : current));
@@ -3741,6 +4336,13 @@ function App(): JSX.Element {
     const targetName = target?.basicInfo.name || (target ? `${target.basicInfo.address}:${target.basicInfo.port}` : hostId);
     if (!target) {
       const message = '未找到目标设备，请刷新后重试。';
+      if (showToast) {
+        toast.error(message);
+      }
+      return { ok: false, hostName: targetName, error: message };
+    }
+    if ((target.basicInfo.protocol ?? 'ssh') !== 'ssh') {
+      const message = '一键部署密钥仅支持 SSH 连接。';
       if (showToast) {
         toast.error(message);
       }
@@ -3971,6 +4573,10 @@ function App(): JSX.Element {
   const handleConnectFromNewTabModal = async (): Promise<void> => {
     if (!selectedTabHost) {
       toast.error('请选择一台主机后再新建终端窗口。');
+      return;
+    }
+    if ((selectedTabHost.basicInfo.protocol ?? 'ssh') === 'serial' && isMobileRuntime) {
+      toast.error('移动端暂不支持本地串口连接，请在桌面端使用 Serial。');
       return;
     }
 
@@ -4368,10 +4974,10 @@ function App(): JSX.Element {
   }, [appScaleStyle, isMobileRuntime, mobileKeyboardInset, mobileBottomNavReservePx]);
   const shellContainerStyle = useMemo(
     () => ({
-      borderColor: isMobileRuntime ? activeUiPalette.panelBorder : 'transparent',
+      borderColor: toRgba(activeUiPalette.panelBorder, isMobileRuntime ? 1 : 0.45),
       background: activeUiPalette.shellBackground,
-      boxShadow: 'none',
-      transition: 'none'
+      boxShadow: isMobileRuntime ? '0 8px 24px rgba(0,0,0,0.28)' : 'inset 0 0 0 1px rgba(148,163,184,0.1)',
+      transition: 'all 150ms ease-in-out'
     }),
     [activeUiPalette.panelBorder, activeUiPalette.shellBackground, isMobileRuntime]
   );
@@ -4380,9 +4986,12 @@ function App(): JSX.Element {
       background: `linear-gradient(145deg, ${toRgba(activeThemePreset.terminalSurfaceHex, 0.94)} 0%, ${toRgba(
         activeThemePreset.terminalSurfaceHex,
         0.72
-      )} 100%)`
+      )} 100%)`,
+      boxShadow: isProductionSession
+        ? 'inset 0 0 0 1px rgba(248,113,113,0.55), 0 0 0 1px rgba(248,113,113,0.22)'
+        : undefined
     }),
-    [activeThemePreset]
+    [activeThemePreset, isProductionSession]
   );
 
   const appContrastClassName = contrastMode === 'high' ? 'contrast-[1.08] saturate-[1.03]' : '';
@@ -4495,25 +5104,39 @@ function App(): JSX.Element {
                   >
                     {uiText.navTerminal}
                   </button>
-                  <button
-                    className={toolbarButtonClass}
-                    onClick={() => {
-                      setCommandPaletteQuery('');
-                      setCommandPaletteActiveIndex(0);
-                      setIsCommandPaletteOpen(true);
-                    }}
-                    type="button"
-                  >
-                    {uiText.navPalette}
-                  </button>
                 </>
               )}
             </div>
 
             <div className="flex items-center gap-2">
+              <button
+                className="inline-flex items-center gap-1.5 rounded-[var(--radius)] border bg-slate-900/70 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-800/80"
+                onClick={() => {
+                  setCommandPaletteQuery('');
+                  setCommandPaletteActiveIndex(0);
+                  setIsCommandPaletteOpen(true);
+                  setIsProfileMenuOpen(false);
+                  setIsSyncPopoverOpen(false);
+                }}
+                style={{ borderColor: toRgba(activeThemePreset.terminalBorder, 0.34) }}
+                title={locale === 'zh-CN' ? '全局搜索' : locale === 'zh-TW' ? '全域搜尋' : locale === 'ja-JP' ? 'グローバル検索' : 'Global Search'}
+                type="button"
+              >
+                <span aria-hidden="true">🔎</span>
+                <span>
+                  {locale === 'zh-CN'
+                    ? '搜索'
+                    : locale === 'zh-TW'
+                      ? '搜尋'
+                      : locale === 'ja-JP'
+                        ? '検索'
+                        : 'Search'}
+                </span>
+              </button>
+
               <div className="group relative" ref={syncIndicatorRef}>
                 <button
-                  className="inline-flex items-center gap-1.5 rounded-lg border bg-white/86 px-2 py-1 text-[11px] text-slate-600 hover:bg-white"
+                  className="inline-flex items-center gap-1.5 rounded-[var(--radius)] border bg-slate-900/70 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-800/80"
                   onClick={() => {
                     setIsSyncPopoverOpen((prev) => !prev);
                     setIsProfileMenuOpen(false);
@@ -4525,12 +5148,12 @@ function App(): JSX.Element {
                   <span className={`inline-flex h-2 w-2 rounded-full ${syncIndicatorDotClass}`} />
                   <span>{uiText.navSync}</span>
                 </button>
-                <div className="pointer-events-none absolute right-0 top-[calc(100%+8px)] z-20 min-w-[220px] rounded-md border border-slate-200 bg-slate-900/95 px-2.5 py-1.5 text-[11px] text-slate-100 opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
+                  <div className="pointer-events-none absolute right-0 top-[calc(100%+8px)] z-20 min-w-[220px] rounded-[var(--radius)] border border-slate-700/70 bg-slate-950/95 px-2.5 py-1.5 text-[10px] text-slate-200 opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
                   {uiText.navLastSync}: {syncLastText}
                 </div>
                 {isSyncPopoverOpen && (
                   <div
-                    className="absolute right-0 top-[calc(100%+8px)] z-30 w-56 rounded-xl border bg-white/95 p-2 shadow-xl backdrop-blur"
+                    className="absolute right-0 top-[calc(100%+8px)] z-30 w-56 rounded-[var(--radius)] border bg-slate-950/92 p-2 shadow-xl backdrop-blur"
                     style={{
                       borderColor: activeUiPalette.panelBorder,
                       background: activeUiPalette.panelBackground
@@ -4544,7 +5167,7 @@ function App(): JSX.Element {
                     </p>
                     <div className="mt-2 grid gap-1.5">
                       <button
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/72 px-3 py-1.5 text-left text-xs font-medium text-slate-200 hover:bg-slate-800/80 disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={isSyncingCloud || !cloudSyncSession}
                         onClick={() => {
                           void handleManualPullSync().finally(() => {
@@ -4556,7 +5179,7 @@ function App(): JSX.Element {
                         {uiText.navPullNow}
                       </button>
                       <button
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/72 px-3 py-1.5 text-left text-xs font-medium text-slate-200 hover:bg-slate-800/80 disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={isSyncingCloud || !cloudSyncSession}
                         onClick={() => {
                           void handleManualForcePushSync().finally(() => {
@@ -4573,7 +5196,7 @@ function App(): JSX.Element {
               </div>
 
               <button
-                className="rounded-lg border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100"
+                className="rounded-[var(--radius)] border border-rose-700/70 bg-rose-950/45 px-2.5 py-1.5 text-[10px] font-medium text-rose-300 hover:bg-rose-900/60"
                 onClick={() => {
                   void lockVault();
                 }}
@@ -4583,9 +5206,9 @@ function App(): JSX.Element {
                 {isMobileLayout ? '🔒' : uiText.navLockNow}
               </button>
 
-              <div className="relative" ref={profileMenuRef}>
+              <div className="relative">
                 <button
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white/90 px-2 py-1 text-[11px] text-slate-700 hover:bg-white"
+                  className="inline-flex items-center gap-2 rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/70 px-2 py-1 text-[10px] text-slate-200 hover:bg-slate-800/80"
                   onClick={() => {
                     setIsProfileMenuOpen((prev) => {
                       const next = !prev;
@@ -4606,14 +5229,26 @@ function App(): JSX.Element {
                 </button>
 
                 {isProfileMenuOpen && (
-                  <div className="absolute right-0 top-[calc(100%+8px)] z-30 w-[min(92vw,20rem)] rounded-xl border border-slate-200 bg-white/95 p-2.5 shadow-xl backdrop-blur sm:w-80">
-                    <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2">
-                      <p className="truncate text-xs font-semibold text-slate-800">{accountDisplayName}</p>
-                      <p className="mt-0.5 text-[11px] text-slate-500">
+                  <div className="fixed inset-0 z-[260] flex items-start justify-end bg-black/46 p-3 backdrop-blur-[8px] sm:p-4">
+                    <button
+                      aria-label="关闭账号菜单"
+                      className="absolute inset-0"
+                      onClick={() => {
+                        setIsProfileMenuOpen(false);
+                      }}
+                      type="button"
+                    />
+                    <div
+                      className="ot-panel relative z-10 w-[min(92vw,22rem)] border-slate-700/70 bg-slate-950/92 p-2.5 shadow-2xl sm:w-80"
+                      ref={profileMenuRef}
+                    >
+                    <div className="rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/70 px-3 py-2">
+                      <p className="truncate text-xs font-semibold text-slate-100">{accountDisplayName}</p>
+                      <p className="mt-0.5 text-[11px] text-slate-400">
                         {uiText.navSyncStatus}: {syncStatusText}
                       </p>
                     </div>
-                    <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2">
+                    <div className="mt-2 rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/66 px-3 py-2">
                       {!isProLicenseActive ? (
                         <button
                           className="w-full rounded-lg border border-[#2f6df4] bg-[#2f6df4] px-3 py-1.5 text-left text-xs font-semibold text-white hover:bg-[#245ad0]"
@@ -4626,11 +5261,11 @@ function App(): JSX.Element {
                         </button>
                       ) : (
                         <div className="space-y-2">
-                          <p className="text-[11px] font-semibold text-emerald-700">
+                          <p className="text-[11px] font-semibold text-emerald-300">
                             {uiText.navProExpires}: {proExpiryText}
                           </p>
                           <button
-                            className="w-full rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-left text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                            className="w-full rounded-[var(--radius)] border border-emerald-700/60 bg-emerald-950/45 px-3 py-1.5 text-left text-xs font-semibold text-emerald-300 hover:bg-emerald-900/56"
                             onClick={() => {
                               handleOpenProCheckout();
                             }}
@@ -4642,12 +5277,12 @@ function App(): JSX.Element {
                       )}
                     </div>
 
-                    <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2">
-                      <p className="text-[11px] font-semibold text-slate-600">{uiText.navQuickPrefs}</p>
-                      <label className="mt-2 flex items-center gap-2 text-xs text-slate-700">
+                    <div className="mt-2 rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/66 px-3 py-2">
+                      <p className="text-[11px] font-semibold text-slate-300">{uiText.navQuickPrefs}</p>
+                      <label className="mt-2 flex items-center gap-2 text-xs text-slate-200">
                         <input
                           checked={profileDraftAutoPathSync}
-                          className="h-3.5 w-3.5"
+                          className="h-4 w-8"
                           onChange={(event) => {
                             setProfileDraftAutoPathSync(event.target.checked);
                           }}
@@ -4655,10 +5290,10 @@ function App(): JSX.Element {
                         />
                         {uiText.navAutoPathSync}
                       </label>
-                      <label className="mt-2 block text-xs text-slate-700">
+                      <label className="mt-2 block text-xs text-slate-200">
                         {uiText.navCloseAction}
                         <select
-                          className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 outline-none focus:border-[#90b6ec]"
+                          className="mt-1 w-full rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/72 px-2 py-1 text-xs text-slate-100 outline-none focus:border-[#90b6ec]"
                           onChange={(event) => {
                             setProfileDraftCloseAction(event.target.value as CloseWindowAction);
                           }}
@@ -4679,7 +5314,7 @@ function App(): JSX.Element {
                           {uiText.navSave}
                         </button>
                         <button
-                          className="rounded-lg border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                          className="rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/72 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800/80"
                           onClick={handleCancelProfileDraft}
                           type="button"
                         >
@@ -4689,9 +5324,9 @@ function App(): JSX.Element {
                     </div>
 
                     <div className="mt-2 space-y-1.5">
-                      <p className="px-1 text-[11px] font-semibold text-slate-500">{t('settings.category.profile')}</p>
+                      <p className="px-1 text-[11px] font-semibold text-slate-400">{t('settings.category.profile')}</p>
                       <button
-                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
+                        className="w-full rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/72 px-3 py-1.5 text-left text-xs text-slate-200 hover:bg-slate-800/80"
                         onClick={() => {
                           if (cloudSyncSession) {
                             openSettingsSection('settings-sync');
@@ -4705,7 +5340,7 @@ function App(): JSX.Element {
                         {locale === 'zh-CN' ? '账号与同步' : locale === 'zh-TW' ? '帳號與同步' : locale === 'ja-JP' ? 'アカウントと同期' : 'Account & Sync'}
                       </button>
                       <button
-                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
+                        className="w-full rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/72 px-3 py-1.5 text-left text-xs text-slate-200 hover:bg-slate-800/80"
                         onClick={() => {
                           openSettingsSection('settings-devices');
                         }}
@@ -4718,6 +5353,21 @@ function App(): JSX.Element {
                             : locale === 'ja-JP'
                               ? 'ログイン端末管理'
                               : 'Device Sessions'}
+                      </button>
+                      <button
+                        className="w-full rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/72 px-3 py-1.5 text-left text-xs text-slate-200 hover:bg-slate-800/80"
+                        onClick={() => {
+                          openSettingsSection('settings-ssh-keys');
+                        }}
+                        type="button"
+                      >
+                        {locale === 'zh-CN'
+                          ? 'SSH 密钥轮换'
+                          : locale === 'zh-TW'
+                            ? 'SSH 金鑰輪換'
+                            : locale === 'ja-JP'
+                              ? 'SSH キーローテーション'
+                              : 'SSH Key Rotation'}
                       </button>
                     </div>
 
@@ -4740,6 +5390,21 @@ function App(): JSX.Element {
                         type="button"
                       >
                         {locale === 'zh-CN' ? '主题与安全' : locale === 'zh-TW' ? '主題與安全' : locale === 'ja-JP' ? 'テーマとセキュリティ' : 'Theme & Security'}
+                      </button>
+                      <button
+                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
+                        onClick={() => {
+                          openSettingsSection('settings-diagnostics');
+                        }}
+                        type="button"
+                      >
+                        {locale === 'zh-CN'
+                          ? '环境诊断'
+                          : locale === 'zh-TW'
+                            ? '環境診斷'
+                            : locale === 'ja-JP'
+                              ? '環境診断'
+                              : 'Health Diagnostics'}
                       </button>
                     </div>
 
@@ -4789,6 +5454,7 @@ function App(): JSX.Element {
                               : 'Open Settings (Cmd/Ctrl+,)'}
                       </button>
                     </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -4802,7 +5468,7 @@ function App(): JSX.Element {
             isMobileRuntime
               ? isMobileTerminalFocusMode
                 ? 'px-1 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-0'
-                : 'px-1 pb-[calc(4.8rem+env(safe-area-inset-bottom))] pt-1'
+                : 'px-1 pb-[calc(5.8rem+env(safe-area-inset-bottom))] pt-1'
               : 'p-0'
           }`}
         >
@@ -4813,7 +5479,7 @@ function App(): JSX.Element {
           )}
 
           {dashboardSection === 'hosts' && (
-            <section className="relative flex h-full min-h-0 gap-2 rounded-none p-0" style={{ background: activeUiPalette.softSurface }}>
+            <section className="relative flex h-full min-h-0 gap-2 overflow-x-hidden rounded-none p-0" style={{ background: activeUiPalette.softSurface }}>
               <aside
                 className={`${
                   isHostFilterDrawerOpen
@@ -4893,7 +5559,7 @@ function App(): JSX.Element {
                   <h2 className="text-sm font-semibold" style={{ color: activeUiPalette.textPrimary }}>
                     {uiText.hostTitle}
                   </h2>
-                  <div className="flex items-center gap-2">
+                  <div className="relative flex items-center gap-2" ref={isMobileRuntime ? mobileHostManageRef : undefined}>
                     <button
                       className={`${toolbarButtonClass} sm:hidden`}
                       onClick={() => {
@@ -4916,19 +5582,88 @@ function App(): JSX.Element {
                     >
                       {uiText.hostAdd}
                     </button>
+                    {isMobileRuntime && (
+                      <button
+                        aria-expanded={isMobileHostManageOpen}
+                        aria-haspopup="menu"
+                        aria-label={
+                          locale === 'en-US'
+                            ? 'Open host manage menu'
+                            : locale === 'ja-JP'
+                              ? 'ホスト管理メニューを開く'
+                              : locale === 'zh-TW'
+                                ? '開啟主機管理選單'
+                                : '打开主机管理菜单'
+                        }
+                        className={toolbarButtonClass}
+                        onClick={() => {
+                          setIsMobileHostManageOpen((prev) => !prev);
+                          void triggerMobileHaptic('light');
+                        }}
+                        type="button"
+                      >
+                        {locale === 'en-US'
+                          ? 'Manage'
+                          : locale === 'ja-JP'
+                            ? '管理'
+                            : locale === 'zh-TW'
+                              ? '管理'
+                              : '管理'}
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <div className="relative min-w-[240px] flex-1">
+                {isMobileRuntime && isMobileHostManageOpen && (
+                  <div
+                    className="mt-2 w-full rounded-[var(--radius)] border p-2"
+                    style={{
+                      borderColor: activeUiPalette.panelBorder,
+                      background: activeUiPalette.panelBackground
+                    }}
+                  >
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        className={toolbarButtonClass}
+                        disabled={filteredHostIds.length === 0 || isBatchDeploying}
+                        onClick={handleSelectAllFilteredHosts}
+                        type="button"
+                      >
+                        {uiText.hostSelectAll}
+                      </button>
+                      <button
+                        className={toolbarButtonClass}
+                        disabled={selectedHostIds.size === 0 || isBatchDeploying}
+                        onClick={handleClearHostSelection}
+                        type="button"
+                      >
+                        {uiText.hostClearSelection}
+                      </button>
+                      <button
+                        className="col-span-2 rounded-[var(--radius)] border border-violet-400/55 bg-violet-500/16 px-2 py-1.5 text-xs font-medium text-violet-200 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={selectedHostIds.size === 0 || isBatchDeploying}
+                        onClick={() => {
+                          void handleBatchDeployPublicKeys();
+                        }}
+                        type="button"
+                      >
+                        {isBatchDeploying ? uiText.hostBatchDeploying : uiText.hostBatchDeployKey}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                  <div className={`relative flex-1 ${isMobileRuntime ? 'min-w-0' : 'min-w-[240px]'}`}>
                     <span
-                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs"
+                      className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px]"
                       style={{ color: activeUiPalette.textMuted }}
                     >
                       🔍
                     </span>
                     <input
-                      className="w-full rounded-xl border py-2 pl-8 pr-24 text-sm outline-none transition"
+                      aria-label={uiText.hostSearchPlaceholder}
+                      className="w-full rounded-[var(--radius)] border py-1.5 pl-7 pr-24 text-xs outline-none transition"
                       onChange={(event) => {
                         setHostSearchQuery(event.target.value);
                         setHighlightedSearchIndex(0);
@@ -4943,18 +5678,48 @@ function App(): JSX.Element {
                       }}
                       value={hostSearchQuery}
                     />
-                    <span
-                      className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded-md border px-1.5 py-0.5 text-[10px]"
-                      style={{
-                        borderColor: activeUiPalette.panelBorder,
-                        color: activeUiPalette.textMuted
-                      }}
-                    >
-                      Ctrl+F
-                    </span>
+                    {!isMobileRuntime && (
+                      <span
+                        className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded-[var(--radius)] border px-1.5 py-0.5 text-[10px]"
+                        style={{
+                          borderColor: activeUiPalette.panelBorder,
+                          color: activeUiPalette.textMuted
+                        }}
+                      >
+                        Ctrl+F
+                      </span>
+                    )}
                   </div>
+                  <select
+                    className="rounded-[var(--radius)] border px-2 py-1.5 text-[11px] outline-none"
+                    onChange={(event) => {
+                      setActiveGroupFilter(event.target.value);
+                      setHighlightedSearchIndex(0);
+                    }}
+                    style={{
+                      borderColor: activeUiPalette.panelBorder,
+                      background: activeUiPalette.panelBackground,
+                      color: activeUiPalette.textPrimary
+                    }}
+                    value={activeGroupFilter}
+                  >
+                    <option value="all">
+                      {locale === 'en-US'
+                        ? 'All groups'
+                        : locale === 'ja-JP'
+                          ? '全グループ'
+                          : locale === 'zh-TW'
+                            ? '全部分組'
+                            : '全部分组'}
+                    </option>
+                    {groupStats.map((item) => (
+                      <option key={`group-filter-${item.group}`} value={item.group}>
+                        {item.group} ({item.count})
+                      </option>
+                    ))}
+                  </select>
                   <span
-                    className="rounded-lg border px-2.5 py-1 text-xs"
+                    className="rounded-[var(--radius)] border px-2 py-0.5 text-[10px]"
                     style={{
                       borderColor: activeUiPalette.panelBorder,
                       background: activeUiPalette.panelBackground,
@@ -4972,7 +5737,7 @@ function App(): JSX.Element {
                   </span>
                   {licensedHostLimit > 0 && (
                     <span
-                      className={`rounded-lg border px-2.5 py-1 text-xs ${
+                      className={`rounded-[var(--radius)] border px-2 py-0.5 text-[10px] ${
                         isLicensedHostLimitReached
                           ? 'border-amber-300 bg-amber-50 text-amber-700'
                           : 'border-emerald-200 bg-emerald-50 text-emerald-700'
@@ -4989,7 +5754,8 @@ function App(): JSX.Element {
                   )}
                 </div>
 
-                <div className="mt-2 flex flex-wrap items-center gap-2">
+                {!isMobileRuntime && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   <button
                     className={toolbarButtonClass}
                     disabled={filteredHostIds.length === 0 || isBatchDeploying}
@@ -5017,7 +5783,7 @@ function App(): JSX.Element {
                     {isBatchDeploying ? uiText.hostBatchDeploying : uiText.hostBatchDeployKey}
                   </button>
                   <span
-                    className="rounded-lg border px-2.5 py-1 text-xs"
+                    className="rounded-[var(--radius)] border px-2 py-0.5 text-[10px]"
                     style={{
                       borderColor: activeUiPalette.panelBorder,
                       background: activeUiPalette.panelBackground,
@@ -5027,50 +5793,183 @@ function App(): JSX.Element {
                     {uiText.hostSelectedCount} {selectedHostCount}
                   </span>
                 </div>
+                )}
 
-                <div className="mt-3 min-h-0 h-[calc(100%-132px)] space-y-3 overflow-auto pr-1">
-                  {hosts.length === 0 && (
-                    <p
-                      className="rounded-xl border border-dashed px-4 py-3 text-sm"
+                {isMobileRuntime && (
+                  <div
+                    aria-live="polite"
+                    className="flex items-center justify-center text-[10px] transition-all duration-150"
+                    style={{
+                      height: hostPullDistance > 0 || isHostPullRefreshing ? 18 : 0,
+                      color: activeUiPalette.textMuted,
+                      opacity: hostPullDistance > 0 || isHostPullRefreshing ? 1 : 0
+                    }}
+                  >
+                    {isHostPullRefreshing
+                      ? locale === 'en-US'
+                        ? 'Refreshing...'
+                        : locale === 'ja-JP'
+                          ? '更新中...'
+                          : locale === 'zh-TW'
+                            ? '正在刷新...'
+                            : '正在刷新...'
+                      : hostPullDistance >= HOST_PULL_REFRESH_THRESHOLD_PX
+                        ? locale === 'en-US'
+                          ? 'Release to refresh'
+                          : locale === 'ja-JP'
+                            ? '離すと更新'
+                            : locale === 'zh-TW'
+                              ? '鬆開即可刷新'
+                              : '松开即可刷新'
+                        : locale === 'en-US'
+                          ? 'Pull to refresh'
+                          : locale === 'ja-JP'
+                            ? '下に引いて更新'
+                            : locale === 'zh-TW'
+                              ? '下拉刷新'
+                              : '下拉刷新'}
+                  </div>
+                )}
+
+                <div
+                  aria-busy={isHostListBootstrapping}
+                  className={`mt-2.5 min-h-0 ${isMobileRuntime ? 'h-[calc(100%-102px)]' : 'h-[calc(100%-118px)]'} space-y-1.5 overflow-y-auto overflow-x-hidden pr-1`}
+                  onTouchEnd={handleHostListTouchEnd}
+                  onTouchMove={handleHostListTouchMove}
+                  onTouchStart={handleHostListTouchStart}
+                  role="list"
+                  ref={hostListScrollRef}
+                >
+                  {isHostListBootstrapping &&
+                    hosts.length > 0 &&
+                    Array.from({ length: 6 }).map((_, index) => (
+                      <div
+                        className="ot-host-row rounded-[var(--radius)] border p-2"
+                        key={`host-skeleton-${index}`}
+                        role="listitem"
+                        style={{
+                          borderColor: activeUiPalette.panelBorder,
+                          background: activeUiPalette.panelBackground
+                        }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="ot-skeleton h-3 w-3 rounded-full" />
+                          <div className="min-w-0 flex-1 space-y-1.5">
+                            <div className="ot-skeleton h-3 w-40 rounded-[var(--radius)]" />
+                            <div className="ot-skeleton h-2.5 w-56 max-w-full rounded-[var(--radius)]" />
+                          </div>
+                          <div className="ot-skeleton h-8 w-16 rounded-[var(--radius)]" />
+                        </div>
+                      </div>
+                    ))}
+
+                  {!isHostListBootstrapping && hosts.length === 0 && (
+                    <div
+                      className="rounded-[var(--radius)] border border-dashed px-4 py-6 text-center"
                       style={{
                         borderColor: activeUiPalette.panelBorder,
                         background: activeUiPalette.panelBackground,
                         color: activeUiPalette.textMuted
                       }}
                     >
-                      {uiText.hostNoItems}
-                    </p>
+                      <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full border border-white/20 bg-white/5 text-2xl shadow-[inset_0_0_20px_rgba(59,130,246,0.15)]">
+                        ✨
+                      </div>
+                      <p className="text-sm font-medium" style={{ color: activeUiPalette.textPrimary }}>
+                        {locale === 'en-US'
+                          ? 'Space is calm. Add your first node.'
+                          : locale === 'ja-JP'
+                            ? 'まだホストがありません。最初のノードを追加しましょう。'
+                            : locale === 'zh-TW'
+                              ? '星際空蕩蕩，先新增你的第一個節點。'
+                              : '星际空荡荡，快去添加你的第一个节点吧。'}
+                      </p>
+                      <p className="mt-1 text-xs">{uiText.hostNoItems}</p>
+                      <button
+                        className="mt-3 rounded-[var(--radius)] border border-[#3570d9] bg-[#2563eb] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#1d4ed8]"
+                        disabled={isLicensedHostLimitReached}
+                        onClick={handleOpenHostWizard}
+                        type="button"
+                      >
+                        {uiText.hostAdd}
+                      </button>
+                    </div>
                   )}
 
-                  {hosts.length > 0 && filteredHosts.length === 0 && (
-                    <p
-                      className="rounded-xl border border-dashed px-4 py-3 text-sm"
+                  {!isHostListBootstrapping && hosts.length > 0 && filteredHosts.length === 0 && (
+                    <div
+                      className="rounded-[var(--radius)] border border-dashed px-4 py-6 text-center"
                       style={{
                         borderColor: activeUiPalette.panelBorder,
                         background: activeUiPalette.panelBackground,
                         color: activeUiPalette.textMuted
                       }}
                     >
-                      {uiText.hostNoResults}
-                    </p>
+                      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full border border-white/20 bg-white/5 text-xl">
+                        🔎
+                      </div>
+                      <p className="text-sm font-medium" style={{ color: activeUiPalette.textPrimary }}>
+                        {uiText.hostNoResults}
+                      </p>
+                      <button
+                        className="mt-3 rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/72 px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-slate-800/80"
+                        onClick={() => {
+                          setHostSearchQuery('');
+                          setActiveGroupFilter('all');
+                          setActiveTagFilter('all');
+                        }}
+                        type="button"
+                      >
+                        {locale === 'en-US'
+                          ? 'Clear filters'
+                          : locale === 'ja-JP'
+                            ? 'フィルターをクリア'
+                            : locale === 'zh-TW'
+                              ? '清除篩選'
+                              : '清除筛选'}
+                      </button>
+                    </div>
                   )}
 
-                  {filteredHosts.map((host, index) => {
+                  {!isHostListBootstrapping && filteredHosts.map((host, index) => {
                     const hostId = buildHostKey(host);
                     const identity = identities.find((item) => item.id === host.identityId);
                     const isHighlighted = index === highlightedSearchIndex;
                     const isSelected = selectedHostIds.has(hostId);
+                    const displayName =
+                      host.basicInfo.name ||
+                      ((host.basicInfo.protocol ?? 'ssh') === 'serial'
+                        ? host.basicInfo.serialPath || `serial-${host.basicInfo.serialBaudRate || 115200}`
+                        : `${host.basicInfo.address}:${host.basicInfo.port}`);
+                    const protocolLabel = resolveProtocolLabel(host.basicInfo.protocol ?? 'ssh', locale);
+                    const endpoint =
+                      (host.basicInfo.protocol ?? 'ssh') === 'serial'
+                        ? host.basicInfo.serialPath || 'serial-device'
+                        : `${identity?.username ?? 'unknown'}@${host.basicInfo.address}:${host.basicInfo.port}`;
+                    const hostGroup = host.basicInfo.group?.trim() || '未分组';
+                    const isMobileActionExpanded = isMobileRuntime && mobileSwipeHostId === hostId;
                     return (
                       <article
-                        className="rounded-xl border px-4 py-3"
+                        aria-label={`${displayName} ${protocolLabel} ${endpoint}`}
+                        className={`ot-host-row group border px-2.5 py-1.5 transition ${
+                          isMobileRuntime ? 'border-x-0 border-t-0 rounded-none px-1.5 shadow-none' : ''
+                        }`}
+                        data-selected={isSelected ? 'true' : 'false'}
                         key={`${host.basicInfo.address}-${host.identityId}-${index}`}
+                        role="listitem"
                         onMouseEnter={() => setHighlightedSearchIndex(index)}
+                        onTouchEnd={(event) => {
+                          handleHostRowTouchEnd(event, hostId);
+                        }}
+                        onTouchStart={(event) => {
+                          handleHostRowTouchStart(event, hostId);
+                        }}
                         style={
                           isHighlighted || isSelected
                             ? {
                                 borderColor: activeUiPalette.accent,
                                 background: activeUiPalette.panelBackground,
-                                boxShadow: `0 0 0 2px ${activeUiPalette.accentSoft}`
+                                boxShadow: isMobileRuntime ? 'none' : `0 0 0 2px ${activeUiPalette.accentSoft}`
                               }
                             : {
                                 borderColor: activeUiPalette.panelBorder,
@@ -5078,93 +5977,90 @@ function App(): JSX.Element {
                               }
                         }
                       >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-[220px] flex-1">
-                            <label
-                              className="mb-1 inline-flex cursor-pointer items-center gap-2 text-[11px]"
-                              style={{ color: activeUiPalette.textMuted }}
-                            >
-                              <input
-                                checked={isSelected}
-                                onChange={() => {
-                                  toggleHostSelection(hostId);
-                                }}
-                                type="checkbox"
-                              />
-                              {uiText.hostSelectedCount}
-                            </label>
-                            <p className="text-sm font-semibold" style={{ color: activeUiPalette.textPrimary }}>
-                              {host.basicInfo.name || `${host.basicInfo.address}:${host.basicInfo.port}`}
-                            </p>
-                            <p className="mt-1 text-xs" style={{ color: activeUiPalette.textMuted }}>
-                              {(identity?.username ?? 'unknown')}@{host.basicInfo.address}:{host.basicInfo.port}
-                            </p>
-                            <p className="mt-1 text-[11px]" style={{ color: activeUiPalette.textMuted }}>
-                              {uiText.hostIdentity}: {identity?.name ?? uiText.hostIdentityMissing}
-                            </p>
-                            {host.basicInfo.description.trim() && (
-                              <p className="mt-1 text-[11px]" style={{ color: activeUiPalette.textMuted }}>
-                                {uiText.hostRemark}: {host.basicInfo.description}
+                        <div className="flex items-center gap-2">
+                          <label
+                            className="inline-flex cursor-pointer items-center gap-2 text-[10px]"
+                            style={{ color: activeUiPalette.textMuted }}
+                          >
+                            <input
+                              checked={isSelected}
+                              onChange={() => {
+                                toggleHostSelection(hostId);
+                              }}
+                              type="checkbox"
+                            />
+                          </label>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                              <p className="truncate text-xs font-semibold" style={{ color: activeUiPalette.textPrimary }}>
+                                {displayName}
                               </p>
-                            )}
-                            {host.advancedOptions.tags.length > 0 && (
-                              <div className="mt-2 flex flex-wrap gap-1.5">
-                                {host.advancedOptions.tags.map((tag) => (
-                                  <button
-                                    className="rounded-md border px-2 py-0.5 text-[11px]"
-                                    key={`${hostId}-${tag}`}
-                                    onClick={() => {
-                                      setActiveTagFilter(tag);
-                                      setHighlightedSearchIndex(0);
-                                    }}
-                                    style={{
-                                      borderColor: activeUiPalette.accent,
-                                      background: activeUiPalette.accentSoft,
-                                      color: activeUiPalette.textPrimary
-                                    }}
-                                    type="button"
-                                  >
-                                    {tag}
-                                  </button>
-                                ))}
+                              <span className="text-[10px]" style={{ color: activeUiPalette.textMuted }}>
+                                {protocolLabel}
+                              </span>
+                              <span className="max-w-full truncate text-[10px]" style={{ color: activeUiPalette.textMuted }}>
+                                {endpoint}
+                              </span>
+                              <span className="max-w-full truncate text-[10px]" style={{ color: activeUiPalette.textMuted }}>
+                                {uiText.hostIdentity}: {identity?.name ?? uiText.hostIdentityMissing}
+                              </span>
+                              <button
+                                className="max-w-full truncate rounded-full px-1.5 py-[1px] text-[9px]"
+                                onClick={() => {
+                                  setActiveGroupFilter(hostGroup);
+                                  setHighlightedSearchIndex(0);
+                                }}
+                                style={{
+                                  background: toRgba(activeUiPalette.accent, 0.15),
+                                  color: activeUiPalette.textMuted
+                                }}
+                                type="button"
+                              >
+                                {locale === 'en-US'
+                                  ? `Group: ${hostGroup}`
+                                  : locale === 'ja-JP'
+                                    ? `グループ: ${hostGroup}`
+                                    : locale === 'zh-TW'
+                                      ? `分組: ${hostGroup}`
+                                      : `分组: ${hostGroup}`}
+                              </button>
+                            </div>
+                            {(host.basicInfo.description.trim() || host.advancedOptions.tags.length > 0) && (
+                              <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                                {host.basicInfo.description.trim() && (
+                                  <p className="truncate text-[10px]" style={{ color: activeUiPalette.textMuted }}>
+                                    {uiText.hostRemark}: {host.basicInfo.description}
+                                  </p>
+                                )}
+                                {host.advancedOptions.tags.length > 0 && (
+                                  <div className="flex min-w-0 flex-wrap gap-1">
+                                    {host.advancedOptions.tags.map((tag) => (
+                                      <button
+                                        className="rounded-full px-1.5 py-[1px] text-[9px]"
+                                        key={`${hostId}-${tag}`}
+                                        onClick={() => {
+                                          setActiveTagFilter(tag);
+                                          setHighlightedSearchIndex(0);
+                                        }}
+                                        style={{
+                                          background: toRgba(activeUiPalette.textMuted, 0.14),
+                                          color: activeUiPalette.textMuted
+                                        }}
+                                        type="button"
+                                      >
+                                        {tag}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>
-                          <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex items-center gap-1.5">
                             <button
-                              className="rounded-lg border border-slate-300 bg-white/85 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                              disabled={deployingHostId === hostId || isBatchDeploying}
-                              onClick={() => {
-                                void handleDeployPublicKeyFromHostList(hostId);
-                              }}
-                              type="button"
-                            >
-                              {deployingHostId === hostId ? uiText.hostDeployingKey : `🔐 ${uiText.hostDeployKey}`}
-                            </button>
-                            <button
-                              className="rounded-lg border border-slate-300 bg-white/85 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                              onClick={() => {
-                                setEditingHostId(hostId);
-                              }}
-                              type="button"
-                            >
-                              ✏️ {uiText.hostEdit}
-                            </button>
-                            <button
-                              className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100"
-                              onClick={() => {
-                                void handleDeleteHost(
-                                  hostId,
-                                  host.basicInfo.name || `${host.basicInfo.address}:${host.basicInfo.port}`
-                                );
-                              }}
-                              type="button"
-                            >
-                              {uiText.hostDelete}
-                            </button>
-                            <button
-                              className="rounded-lg border border-[#4f78af] bg-[#0a3a78] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#0d4b98] disabled:cursor-not-allowed disabled:opacity-60"
-                              disabled={isConnectingTerminal}
+                              aria-label={`${uiText.hostConnect}: ${displayName}`}
+                              className="rounded-[var(--radius)] border border-[#3570d9] bg-[#2563eb] px-2.5 py-1 text-[10px] font-semibold text-white transition hover:bg-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-60"
+                              disabled={isConnectingTerminal || ((host.basicInfo.protocol ?? 'ssh') === 'serial' && isMobileRuntime)}
                               onClick={() => {
                                 void handleConnectFromHostList(hostId);
                               }}
@@ -5174,8 +6070,101 @@ function App(): JSX.Element {
                                 ? uiText.hostConnecting
                                 : uiText.hostConnect}
                             </button>
+                            {isMobileRuntime ? (
+                              <button
+                                aria-label={
+                                  locale === 'en-US'
+                                    ? 'More host actions'
+                                    : locale === 'ja-JP'
+                                      ? 'ホスト操作を開く'
+                                      : locale === 'zh-TW'
+                                        ? '開啟主機更多操作'
+                                        : '打开主机更多操作'
+                                }
+                                className="h-9 min-w-9 rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/72 px-2 text-[14px] text-slate-100"
+                                onClick={() => {
+                                  setMobileSwipeHostId((prev) => (prev === hostId ? null : hostId));
+                                  void triggerMobileHaptic('light');
+                                }}
+                                type="button"
+                              >
+                                ⋯
+                              </button>
+                            ) : (
+                              <div className="ot-host-row-actions flex items-center gap-1.5 transition">
+                                <button
+                                  className="rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/72 px-2 py-1 text-[10px] font-medium text-slate-200 hover:bg-slate-800/74 disabled:cursor-not-allowed disabled:opacity-60"
+                                  disabled={deployingHostId === hostId || isBatchDeploying}
+                                  onClick={() => {
+                                    void handleDeployPublicKeyFromHostList(hostId);
+                                  }}
+                                  type="button"
+                                >
+                                  {deployingHostId === hostId ? uiText.hostDeployingKey : `🔐`}
+                                </button>
+                                <button
+                                  className="rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/72 px-2 py-1 text-[10px] font-medium text-slate-200 hover:bg-slate-800/74"
+                                  onClick={() => {
+                                    setEditingHostId(hostId);
+                                  }}
+                                  type="button"
+                                >
+                                  ✎
+                                </button>
+                                <button
+                                  className="rounded-[var(--radius)] border border-rose-700/60 bg-rose-950/40 px-2 py-1 text-[10px] font-medium text-rose-300 hover:bg-rose-900/55"
+                                  onClick={() => {
+                                    void handleDeleteHost(
+                                      hostId,
+                                      host.basicInfo.name || `${host.basicInfo.address}:${host.basicInfo.port}`
+                                    );
+                                  }}
+                                  type="button"
+                                >
+                                  ⌫
+                                </button>
+                              </div>
+                            )}
                           </div>
                         </div>
+                        {isMobileActionExpanded && (
+                          <div className="mt-1 flex items-center justify-end gap-1">
+                            <button
+                              className="h-9 rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/72 px-2.5 text-[11px] font-medium text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+                              disabled={deployingHostId === hostId || isBatchDeploying}
+                              onClick={() => {
+                                void handleDeployPublicKeyFromHostList(hostId);
+                                setMobileSwipeHostId(null);
+                              }}
+                              type="button"
+                            >
+                              {deployingHostId === hostId ? uiText.hostDeployingKey : 'Deploy Key'}
+                            </button>
+                            <button
+                              className="h-9 rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/72 px-2.5 text-[11px] font-medium text-slate-200"
+                              onClick={() => {
+                                setEditingHostId(hostId);
+                                setMobileSwipeHostId(null);
+                              }}
+                              type="button"
+                            >
+                              {uiText.hostEdit}
+                            </button>
+                            <button
+                              className="h-9 rounded-[var(--radius)] border border-rose-700/60 bg-rose-950/40 px-2.5 text-[11px] font-medium text-rose-300"
+                              onClick={() => {
+                                void handleDeleteHost(
+                                  hostId,
+                                  host.basicInfo.name || `${host.basicInfo.address}:${host.basicInfo.port}`
+                                );
+                                setMobileSwipeHostId(null);
+                              }}
+                              type="button"
+                            >
+                              {uiText.hostDelete}
+                            </button>
+                          </div>
+                        )}
                       </article>
                     );
                   })}
@@ -5204,13 +6193,22 @@ function App(): JSX.Element {
             <div
               className={`shrink-0 rounded-lg border ${isMobileRuntime ? 'px-1.5 py-0.5' : 'px-2 py-1'}`}
               style={{
-                borderColor: toRgba(activeThemePreset.terminalBorder, 0.74),
-                background: toRgba(activeThemePreset.terminalSurfaceHex, 0.84)
+                borderColor: isProductionSession
+                  ? 'rgba(248,113,113,0.62)'
+                  : toRgba(activeThemePreset.terminalBorder, 0.74),
+                background: isProductionSession
+                  ? `linear-gradient(180deg, ${toRgba(activeThemePreset.terminalSurfaceHex, 0.84)} 0%, rgba(127,29,29,0.22) 100%)`
+                  : toRgba(activeThemePreset.terminalSurfaceHex, 0.84)
               }}
             >
               <div className="flex items-center justify-between gap-1.5">
                 <div className="flex min-w-0 items-center gap-1.5">
                   <h2 className="text-[11px] font-semibold text-[#d7e5ff]">{uiText.terminalTitle}</h2>
+                  {isProductionSession && (
+                    <span className="rounded-[var(--radius)] border border-rose-400/70 bg-rose-500/18 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-[0.08em] text-rose-200">
+                      PROD
+                    </span>
+                  )}
                   {!isMobileRuntime ? (
                     <>
                       <button
@@ -5218,9 +6216,10 @@ function App(): JSX.Element {
                         onClick={() => {
                           setIsNewTabModalOpen(true);
                         }}
+                        title={uiText.terminalNewWindow}
                         type="button"
                       >
-                        {uiText.terminalNewWindow}
+                        ＋
                       </button>
                       <button
                         className={darkPanelButtonClass}
@@ -5229,9 +6228,21 @@ function App(): JSX.Element {
                         }}
                         type="button"
                       >
-                        {uiText.terminalLogs}
+                        📜
                       </button>
-                      {activeTerminalSessionId && (
+                      <button
+                        className={`${darkPanelButtonClass} ${
+                          isDesktopCommandBarVisible ? 'border-[#3570d9] bg-[#153265] text-[#d7e6ff]' : ''
+                        }`}
+                        onClick={() => {
+                          setIsDesktopCommandBarVisible((prev) => !prev);
+                        }}
+                        title={isDesktopCommandBarVisible ? '隐藏命令栏 (Cmd/Ctrl+J)' : '显示命令栏 (Cmd/Ctrl+J)'}
+                        type="button"
+                      >
+                        ⌘
+                      </button>
+                      {activeTerminalSessionId && isActiveSessionSsh && (
                         <button
                           className={darkPanelButtonClass}
                           onClick={() => {
@@ -5242,7 +6253,7 @@ function App(): JSX.Element {
                           主机信息
                         </button>
                       )}
-                      {activeTerminalSessionId && (
+                      {activeTerminalSessionId && isActiveSessionSsh && (
                         <button
                           className={`${darkPanelButtonClass} ${
                             autoSftpPathSyncEnabled ? 'border-[#5cc89a] bg-[#123826] text-[#c9f4de] hover:bg-[#174932]' : ''
@@ -5257,7 +6268,7 @@ function App(): JSX.Element {
                           {autoSftpPathSyncEnabled ? ` ${uiText.terminalPathSyncOn}` : ` ${uiText.terminalPathSyncOff}`}
                         </button>
                       )}
-                      {activeTerminalSessionId && (
+                      {activeTerminalSessionId && isActiveSessionSsh && (
                         <button
                           className={`${darkPanelButtonClass} disabled:cursor-not-allowed disabled:opacity-55`}
                           disabled={isSyncingPath}
@@ -5292,68 +6303,226 @@ function App(): JSX.Element {
                           onClick={() => {
                             void handleToggleWindowMaximize();
                           }}
+                          title={isWindowMaximized ? uiText.terminalRestore : uiText.terminalMaximize}
                           type="button"
                         >
-                          {isWindowMaximized ? uiText.terminalRestore : uiText.terminalMaximize}
+                          {isWindowMaximized ? '🗗' : '🗖'}
                         </button>
                       )}
                       {activeSessionId && (
                         <button
                           className={darkPanelButtonClass}
                           onClick={() => {
-                            void closeTerminal();
+                            void handleCloseActiveTerminal();
                           }}
+                          title={uiText.terminalCloseCurrent}
                           type="button"
                         >
-                          {uiText.terminalCloseCurrent}
+                          ✕
                         </button>
                       )}
-                      {activeSessions.length > 1 && (
+                      {activeTerminalSessionId && isActiveSessionSsh && (
                         <button
-                          className="rounded-lg border border-amber-500 bg-amber-200/90 px-2 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100"
+                          className={`${darkPanelButtonClass} ${isSftpCollapsed ? '' : 'border-[#3570d9] bg-[#153265] text-[#d7e6ff]'}`}
                           onClick={() => {
                             setIsSftpCollapsed((prev) => !prev);
                           }}
+                          title={isSftpCollapsed ? '展开 SFTP (Cmd/Ctrl+B)' : '收起 SFTP (Cmd/Ctrl+B)'}
                           type="button"
                         >
-                          {isSftpCollapsed ? uiText.terminalExpandSftp : uiText.terminalCollapseSftp}
+                          {isSftpCollapsed ? '🗂' : '🗂'}
                         </button>
                       )}
                     </>
                   ) : (
                     <div className="flex items-center gap-1">
                       <button
+                        aria-label={
+                          locale === 'en-US'
+                            ? 'Back to app'
+                            : locale === 'ja-JP'
+                              ? 'アプリに戻る'
+                              : locale === 'zh-TW'
+                                ? '返回應用'
+                                : '返回应用'
+                        }
                         className={mobileTopActionButtonClass}
                         onClick={handleReturnToMobileApp}
+                        title="返回应用"
                         type="button"
                       >
-                        返回应用
+                        <span aria-hidden="true">↩</span>
+                        <span className="text-[10px]">
+                          {locale === 'en-US'
+                            ? 'Back'
+                            : locale === 'ja-JP'
+                              ? '戻る'
+                              : locale === 'zh-TW'
+                                ? '返回'
+                                : '返回'}
+                        </span>
                       </button>
                       {!isMobileLandscape && (
                         <>
                           <button
+                            aria-label={
+                              isMobileTerminalToolsExpanded
+                                ? locale === 'en-US'
+                                  ? 'Collapse tools'
+                                  : locale === 'ja-JP'
+                                    ? 'ツールを隠す'
+                                    : locale === 'zh-TW'
+                                      ? '收起工具'
+                                      : '收起工具'
+                                : locale === 'en-US'
+                                  ? 'Expand tools'
+                                  : locale === 'ja-JP'
+                                    ? 'ツールを表示'
+                                    : locale === 'zh-TW'
+                                      ? '展開工具'
+                                      : '展开工具'
+                            }
                             className={mobileTopActionButtonClass}
                             onClick={() => {
                               setIsMobileTerminalToolsExpanded((prev) => !prev);
+                              void triggerMobileHaptic('light');
                             }}
+                            title={isMobileTerminalToolsExpanded ? '隐藏工具' : '展开工具'}
                             type="button"
                           >
-                            {isMobileTerminalToolsExpanded ? '隐藏工具' : '展开工具'}
+                            <span aria-hidden="true">🧰</span>
+                            <span className="text-[10px]">
+                              {locale === 'en-US'
+                                ? 'Tools'
+                                : locale === 'ja-JP'
+                                  ? 'ツール'
+                                  : locale === 'zh-TW'
+                                    ? '工具'
+                                    : '工具'}
+                            </span>
                           </button>
                           <button
+                            aria-label={
+                              isMobileMetricsExpanded
+                                ? locale === 'en-US'
+                                  ? 'Collapse metrics'
+                                  : locale === 'ja-JP'
+                                    ? 'メトリクスを隠す'
+                                    : locale === 'zh-TW'
+                                      ? '收起監控'
+                                      : '收起监控'
+                                : locale === 'en-US'
+                                  ? 'Expand metrics'
+                                  : locale === 'ja-JP'
+                                    ? 'メトリクスを表示'
+                                    : locale === 'zh-TW'
+                                      ? '展開監控'
+                                      : '展开监控'
+                            }
                             className={mobileTopActionButtonClass}
                             onClick={() => {
                               setIsMobileMetricsExpanded((prev) => !prev);
-                              if (isMetricDetailOpen) {
-                                setIsMetricDetailOpen(false);
-                              }
+                              void triggerMobileHaptic('light');
+                            }}
+                            title={isMobileMetricsExpanded ? '隐藏监控' : '展开监控'}
+                            type="button"
+                          >
+                            <span aria-hidden="true">📈</span>
+                            <span className="text-[10px]">
+                              {locale === 'en-US'
+                                ? 'Metrics'
+                                : locale === 'ja-JP'
+                                  ? '監視'
+                                  : locale === 'zh-TW'
+                                    ? '監控'
+                                    : '监控'}
+                            </span>
+                          </button>
+                          <button
+                            aria-label={snippetsPanelCollapsed ? uiText.terminalSnippetOpen : uiText.terminalSnippetClose}
+                            className={mobileTopActionButtonClass}
+                            onClick={() => {
+                              setSnippetsPanelCollapsed(!snippetsPanelCollapsed);
+                              void triggerMobileHaptic('light');
+                            }}
+                            title={snippetsPanelCollapsed ? uiText.terminalSnippetOpen : uiText.terminalSnippetClose}
+                            type="button"
+                          >
+                            <span aria-hidden="true">📚</span>
+                            <span className="text-[10px]">
+                              {locale === 'en-US'
+                                ? 'Library'
+                                : locale === 'ja-JP'
+                                  ? 'ライブラリ'
+                                  : locale === 'zh-TW'
+                                    ? '指令庫'
+                                    : '指令库'}
+                            </span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {isMobileRuntime && isMobileTerminalSheetOpen && (
+                    <div className="absolute inset-0 z-40 flex items-end bg-black/30 backdrop-blur-[2px]">
+                      <button
+                        aria-label="close-mobile-terminal-sheet"
+                        className="absolute inset-0"
+                        onClick={() => {
+                          setIsMobileTerminalSheetOpen(false);
+                        }}
+                        type="button"
+                      />
+                      <div
+                        className="relative z-10 w-full rounded-t-xl border border-b-0 p-3 backdrop-blur-[20px]"
+                        style={{
+                          borderColor: toRgba(activeThemePreset.terminalBorder, 0.5),
+                          background: toRgba(activeThemePreset.terminalSurfaceHex, 0.9)
+                        }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-semibold text-[#d7e5ff]">终端操作</p>
+                          <button
+                            className={darkPanelButtonClass}
+                            onClick={() => {
+                              setIsMobileTerminalSheetOpen(false);
                             }}
                             type="button"
                           >
-                            {isMobileMetricsExpanded ? '隐藏监控' : '展开监控'}
+                            关闭
+                          </button>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-1.5">
+                          <button
+                            className={terminalDraftActionButtonClass}
+                            onClick={() => {
+                              void handleCopyTerminalOutput('visible');
+                            }}
+                            type="button"
+                          >
+                            Copy Visible
                           </button>
                           <button
-                            className={mobileTopActionButtonClass}
+                            className={terminalDraftActionButtonClass}
+                            onClick={() => {
+                              void handleCopyTerminalOutput('all');
+                            }}
+                            type="button"
+                          >
+                            Copy All
+                          </button>
+                          <button
+                            className={terminalDraftActionButtonClass}
+                            onClick={() => {
+                              setIsDraftHistoryOpen((prev) => !prev);
+                            }}
+                            type="button"
+                          >
+                            历史命令
+                          </button>
+                          <button
+                            className={terminalDraftActionButtonClass}
                             onClick={() => {
                               setSnippetsPanelCollapsed(!snippetsPanelCollapsed);
                             }}
@@ -5361,8 +6530,38 @@ function App(): JSX.Element {
                           >
                             {snippetsPanelCollapsed ? uiText.terminalSnippetOpen : uiText.terminalSnippetClose}
                           </button>
-                        </>
-                      )}
+                        </div>
+                        {(isDraftHistoryOpen || draftHistoryPreview.length > 0) && (
+                          <div
+                            className="mt-2 max-h-44 overflow-auto rounded-[var(--radius)] border p-1"
+                            style={{
+                              borderColor: toRgba(activeThemePreset.terminalBorder, 0.52),
+                              background: toRgba(activeThemePreset.terminalSurfaceHex, 0.82)
+                            }}
+                          >
+                            {draftHistoryPreview.length === 0 ? (
+                              <p className="px-2 py-1 text-[11px] text-[#b1c4e2]">暂无历史命令</p>
+                            ) : (
+                              draftHistoryPreview.map((item, index) => (
+                                <button
+                                  className="block w-full truncate rounded-[var(--radius)] px-2 py-1 text-left text-[11px] hover:bg-white/10"
+                                  key={`${item}-${index}`}
+                                  onClick={() => {
+                                    setTerminalDraftCommand(item);
+                                    setTerminalDraftHistoryCursor(-1);
+                                    setIsDraftHistoryOpen(false);
+                                    setIsMobileTerminalSheetOpen(false);
+                                  }}
+                                  style={{ color: activeThemePreset.terminalTheme.foreground ?? '#dce9ff' }}
+                                  type="button"
+                                >
+                                  {item}
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -5387,7 +6586,7 @@ function App(): JSX.Element {
                   >
                     {uiText.terminalLogs}
                   </button>
-                  {activeTerminalSessionId && (
+                  {activeTerminalSessionId && isActiveSessionSsh && (
                     <button
                       className={compactDarkPanelButtonClass}
                       onClick={() => {
@@ -5398,7 +6597,7 @@ function App(): JSX.Element {
                       主机信息
                     </button>
                   )}
-                  {activeTerminalSessionId && (
+                  {activeTerminalSessionId && isActiveSessionSsh && (
                     <button
                       className={`${compactDarkPanelButtonClass} ${
                         autoSftpPathSyncEnabled ? 'border-[#5cc89a] bg-[#123826] text-[#c9f4de] hover:bg-[#174932]' : ''
@@ -5412,7 +6611,7 @@ function App(): JSX.Element {
                       {autoSftpPathSyncEnabled ? ` ${uiText.terminalPathSyncOn}` : ` ${uiText.terminalPathSyncOff}`}
                     </button>
                   )}
-                  {activeTerminalSessionId && (
+                  {activeTerminalSessionId && isActiveSessionSsh && (
                     <button
                       className={`${compactDarkPanelButtonClass} disabled:cursor-not-allowed disabled:opacity-55`}
                       disabled={isSyncingPath}
@@ -5442,7 +6641,7 @@ function App(): JSX.Element {
                     <button
                       className={compactDarkPanelButtonClass}
                       onClick={() => {
-                        void closeTerminal();
+                        void handleCloseActiveTerminal();
                       }}
                       type="button"
                     >
@@ -5500,121 +6699,50 @@ function App(): JSX.Element {
                 </p>
               )}
               {(!isMobileRuntime || isMobileMetricsExpanded) && (
-                <div className="mt-1 overflow-x-auto">
-                  <div className="grid min-w-[620px] grid-cols-5 gap-1 md:min-w-[800px]">
-                    {metricCards.map((metric) => (
-                      <button
-                        className="rounded-md text-left ring-1 ring-transparent transition hover:ring-[#6ea8ff]/55 focus:outline-none focus:ring-[#6ea8ff]"
-                        key={metric.key}
-                        onClick={() => {
-                          setMetricDetailKey(metric.key);
-                          setIsMetricDetailOpen(true);
-                        }}
-                        title={
-                          locale === 'zh-CN'
-                            ? `查看 ${metric.title} 详细趋势`
-                            : locale === 'zh-TW'
-                              ? `查看 ${metric.title} 詳細趨勢`
-                              : locale === 'ja-JP'
-                                ? `${metric.title} の詳細トレンドを表示`
-                                : `View ${metric.title} trend details`
-                        }
-                        type="button"
-                      >
-                        <MetricTrendChart
-                          fillColor={metric.fillColor}
-                          fixedMax={metric.fixedMax}
-                          lineColor={metric.lineColor}
-                          points={metric.points}
-                          title={metric.title}
-                          valueText={metric.valueText}
-                        />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {(!isMobileRuntime || isMobileMetricsExpanded) && isMetricDetailOpen && activeMetricCard && (
-                <div
-                  className="mt-1 rounded-lg border px-2 py-1.5"
-                  style={{
-                    borderColor: toRgba(activeThemePreset.terminalBorder, 0.72),
-                    background: toRgba(activeThemePreset.terminalSurfaceHex, 0.72)
-                  }}
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <p className="text-xs font-semibold text-[#dbe9ff]">
-                        {locale === 'zh-CN'
-                          ? `${activeMetricCard.title} 详细视图`
-                          : locale === 'zh-TW'
-                            ? `${activeMetricCard.title} 詳細視圖`
-                            : locale === 'ja-JP'
-                              ? `${activeMetricCard.title} 詳細ビュー`
-                              : `${activeMetricCard.title} Detail`}
-                      </p>
-                      <p className="text-[11px] text-[#8fa5c7]">
-                        {locale === 'zh-CN'
-                          ? '支持 1 分钟 / 5 分钟 / 10 分钟趋势，时间刻度 5 秒。'
-                          : locale === 'zh-TW'
-                            ? '支援 1 分鐘 / 5 分鐘 / 10 分鐘趨勢，時間刻度 5 秒。'
-                            : locale === 'ja-JP'
-                              ? '1分 / 5分 / 10分の推移。時間目盛りは5秒。'
-                              : 'Trend windows: 1m / 5m / 10m, with 5-second ticks.'}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {metricDetailWindowOptions.map((item) => (
-                        <button
-                          className={`rounded border px-2 py-1 text-[11px] ${
-                            metricDetailWindowSeconds === item.seconds
-                              ? 'border-[#7bb1ff] bg-[#1d3f6d] text-[#e8f2ff]'
-                              : 'border-[#4f6f9d] bg-[#0f1726] text-[#b9cae4] hover:bg-[#13203a]'
-                          }`}
-                          key={item.seconds}
-                          onClick={() => {
-                            setMetricDetailWindowSeconds(item.seconds);
+                <div className="mt-1">
+                  <div className="grid grid-cols-1 gap-1 md:grid-cols-5">
+                    {metricCards.map((metric) => {
+                      const progress = resolveMetricProgressPercent(metric.key, activeSessionSysStatus);
+                      return (
+                        <div
+                          className="rounded-[var(--radius)] border px-2 py-1"
+                          key={metric.key}
+                          style={{
+                            borderColor: toRgba(activeThemePreset.terminalBorder, 0.52),
+                            background: toRgba(activeThemePreset.terminalSurfaceHex, 0.5)
                           }}
-                          type="button"
                         >
-                          {item.label}
-                        </button>
-                      ))}
-                      <button
-                        className="rounded border border-[#4f6f9d] bg-[#0f1726] px-2 py-1 text-[11px] text-[#d7e5ff] hover:bg-[#13203a]"
-                        onClick={() => {
-                          setIsMetricDetailOpen(false);
-                        }}
-                        type="button"
-                      >
-                        {locale === 'zh-CN' ? '收起' : locale === 'zh-TW' ? '收起' : locale === 'ja-JP' ? '閉じる' : 'Close'}
-                      </button>
-                    </div>
+                          <div className="flex items-center justify-between gap-2 text-[10px]">
+                            <span className="font-semibold" style={{ color: activeThemePreset.terminalTheme.foreground ?? '#dce9ff' }}>
+                              {metric.title}
+                            </span>
+                            <span style={{ color: toRgba(activeThemePreset.terminalTheme.foreground ?? '#dce9ff', 0.84) }}>
+                              {metric.valueText}
+                            </span>
+                          </div>
+                          <div className="mt-1 h-[6px] w-full overflow-hidden rounded-[var(--radius)] bg-slate-800/70">
+                            <div
+                              className="h-full rounded-[var(--radius)] transition-all duration-150 ease-in-out"
+                              style={{
+                                width: `${progress}%`,
+                                background: metric.lineColor
+                              }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <MetricTrendChart
-                    chartHeight={120}
-                    className="mt-1 min-w-0 bg-[#081321]/90 px-2 py-1.5 ring-[#38507b]"
-                    fillColor={activeMetricCard.fillColor}
-                    fixedMax={activeMetricCard.fixedMax}
-                    lineColor={activeMetricCard.lineColor}
-                    points={activeMetricCard.points}
-                    tickSeconds={5}
-                    title={activeMetricCard.title}
-                    titleClassName="text-[11px]"
-                    valueClassName="text-[11px]"
-                    valueText={activeMetricCard.valueText}
-                    windowSeconds={metricDetailWindowSeconds}
-                  />
                 </div>
               )}
             </div>
 
             <div className={`min-h-0 flex flex-1 gap-2.5 ${isMobileRuntime ? 'flex-col' : ''}`}>
               <div
-                className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl p-1.5"
+                className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[var(--radius)] p-1"
                 style={{
-                  background: toRgba(activeThemePreset.terminalSurfaceHex, 0.72),
-                  boxShadow: `inset 0 0 0 1px ${toRgba(activeThemePreset.terminalBorder, 0.18)}`
+                  background: toRgba(activeThemePreset.terminalSurfaceHex, 0.6),
+                  boxShadow: `inset 0 0 0 1px ${toRgba(activeThemePreset.terminalBorder, 0.12)}`
                 }}
               >
                 <SnippetsPanel
@@ -5673,7 +6801,7 @@ function App(): JSX.Element {
                         <button
                           className="ot-compact-hit rounded px-1 hover:bg-[#1b2d4a]"
                           onClick={() => {
-                            void closeSession(session.id);
+                            void handleCloseSessionTab(session.id);
                           }}
                           title="关闭标签"
                           type="button"
@@ -5718,9 +6846,9 @@ function App(): JSX.Element {
                               key={session.id}
                             >
                               <div
-                                className="h-full min-h-0 overflow-hidden rounded-lg"
+                                className="h-full min-h-0 overflow-hidden rounded-[var(--radius)]"
                                 style={{
-                                  background: toRgba(activeThemePreset.terminalSurfaceHex, 0.6)
+                                  background: toRgba(activeThemePreset.terminalSurfaceHex, 0.52)
                                 }}
                               >
                                 <OrbitTerminal
@@ -5775,266 +6903,419 @@ function App(): JSX.Element {
                     )}
                   </div>
 
-                  <div
-                    className={`rounded-lg border-t px-2 pt-2 ${
-                      isMobileRuntime && !isMobileLandscape
-                        ? 'mt-1 sticky bottom-0 z-30 shrink-0 pb-[calc(0.5rem+env(safe-area-inset-bottom))]'
-                        : 'mt-1 shrink-0 pb-1'
-                    }`}
-                    style={{
-                      borderColor: toRgba(activeThemePreset.terminalBorder, 0.38),
-                      background: toRgba(activeThemePreset.terminalSurfaceHex, 0.76)
-                    }}
-                  >
-                    <div className={`flex ${isMobileRuntime && isMobileLandscape ? 'h-full flex-col' : 'items-end'} gap-2`}>
-                      <div className="min-w-0 flex-1">
-                        <label
-                          className="mb-1 block text-[11px]"
-                          htmlFor="terminal-pre-input"
-                          style={{ color: toRgba(activeThemePreset.terminalBorder, 0.95) }}
-                        >
-                          {isMobileRuntime
-                            ? `${uiText.terminalPreInputLabel}（Enter 发送，Shift+Enter 换行）`
-                            : uiText.terminalPreInputLabel}
-                        </label>
-                        <textarea
-                          className={`w-full resize-none rounded-md border px-3 py-1.5 outline-none placeholder:text-slate-400 ${
-                            isMobileRuntime ? 'text-sm leading-6' : 'text-xs'
-                          }`}
-                          disabled={!activeTerminalSessionId}
-                          id="terminal-pre-input"
-                          readOnly={!allowPreInputKeyboard}
-                          ref={terminalPreInputRef}
-                          onChange={(event) => {
-                            setTerminalDraftCommand(event.target.value);
-                            setTerminalDraftHistoryCursor(-1);
-                            setIsDraftHistoryOpen(false);
-                          }}
-                          onClick={(event) => {
-                            if (isMobileRuntime && !allowPreInputKeyboard) {
-                              event.preventDefault();
-                              toast.message('请先点击“键盘输入”按钮，再点击输入栏调出系统键盘。');
-                            }
-                          }}
-                          onPointerDown={(event) => {
-                            if (isMobileRuntime && !allowPreInputKeyboard) {
-                              event.preventDefault();
-                              event.stopPropagation();
-                            }
-                          }}
-                          onTouchStart={(event) => {
-                            if (isMobileRuntime && !allowPreInputKeyboard) {
-                              event.preventDefault();
-                              event.stopPropagation();
-                            }
-                          }}
-                          onFocus={() => {
-                            if (isMobileRuntime && !allowPreInputKeyboard) {
-                              terminalPreInputRef.current?.blur();
-                              return;
-                            }
-                            if (!isMobileRuntime) {
-                              return;
-                            }
-                            window.setTimeout(() => {
-                              terminalPreInputRef.current?.scrollIntoView({
-                                behavior: 'smooth',
-                                block: 'nearest',
-                                inline: 'nearest'
-                              });
-                            }, 80);
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === 'ArrowUp') {
-                              if (terminalDraftHistory.length === 0) {
-                                return;
-                              }
-                              event.preventDefault();
-                              const nextCursor =
-                                terminalDraftHistoryCursor < 0
-                                  ? terminalDraftHistory.length - 1
-                                  : Math.max(0, terminalDraftHistoryCursor - 1);
-                              if (terminalDraftHistoryCursor < 0) {
-                                setTerminalDraftSnapshot(terminalDraftCommand);
-                              }
-                              setTerminalDraftHistoryCursor(nextCursor);
-                              const nextCommand = terminalDraftHistory[nextCursor] ?? '';
-                              setTerminalDraftCommand(nextCommand);
-                              return;
-                            }
-                            if (event.key === 'ArrowDown') {
-                              if (terminalDraftHistory.length === 0 || terminalDraftHistoryCursor < 0) {
-                                return;
-                              }
-                              event.preventDefault();
-                              if (terminalDraftHistoryCursor >= terminalDraftHistory.length - 1) {
-                                setTerminalDraftHistoryCursor(-1);
-                                setTerminalDraftCommand(terminalDraftSnapshot);
-                                return;
-                              }
-                              const nextCursor = Math.min(
-                                terminalDraftHistory.length - 1,
-                                terminalDraftHistoryCursor + 1
-                              );
-                              setTerminalDraftHistoryCursor(nextCursor);
-                              setTerminalDraftCommand(terminalDraftHistory[nextCursor] ?? '');
-                              return;
-                            }
-                            if (event.key === 'Enter' && !event.shiftKey) {
-                              event.preventDefault();
-                              void executeDraftCommand();
-                            }
-                          }}
-                          placeholder={
-                            activeTerminalSessionId
-                              ? uiText.terminalPreInputPlaceholder
-                              : uiText.terminalPreInputDisabled
-                          }
+                  {shouldShowTerminalCommandBar && (
+                    <>
+                      {isMobileRuntime ? (
+                        <div
+                          className="mt-1 sticky bottom-0 z-30 shrink-0 rounded-[var(--radius)] border p-1.5 pb-[calc(0.4rem+env(safe-area-inset-bottom))]"
                           style={{
-                            borderColor: toRgba(activeThemePreset.terminalBorder, 0.68),
-                            background: toRgba(activeThemePreset.terminalSurfaceHex, 0.68),
-                            color: activeThemePreset.terminalTheme.foreground ?? '#dce9ff'
+                            borderColor: toRgba(activeThemePreset.terminalBorder, 0.42),
+                            background: toRgba(activeThemePreset.terminalSurfaceHex, 0.96)
                           }}
-                          value={terminalDraftCommand}
-                          rows={isMobileRuntime ? (isMobileLandscape ? 8 : 4) : 1}
-                        />
-                        {isMobileRuntime && (
-                          <p className="mt-1 text-[11px] text-[#a8bcde]">
-                            {terminalDraftCommand.trim()
-                              ? `已输入 ${terminalDraftCommand.length} 个字符`
-                              : '在此输入命令，发送后会逐行执行。'}
-                          </p>
-                        )}
-                        {isDraftHistoryOpen && draftHistoryPreview.length > 0 && (
-                          <div
-                            className="mt-1.5 max-h-44 overflow-auto rounded-md border p-1 text-[11px]"
-                            style={{
-                              borderColor: toRgba(activeThemePreset.terminalBorder, 0.52),
-                              background: toRgba(activeThemePreset.terminalSurfaceHex, 0.86)
-                            }}
-                          >
-                            {draftHistoryPreview.map((item, index) => (
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <textarea
+                              className="h-11 min-w-0 flex-1 resize-none rounded-[var(--radius)] border px-3 py-2 text-[13px] leading-5 outline-none placeholder:text-slate-400"
+                              disabled={!activeTerminalSessionId}
+                              id="terminal-pre-input"
+                              readOnly={!allowPreInputKeyboard}
+                              ref={terminalPreInputRef}
+                              onChange={(event) => {
+                                setTerminalDraftCommand(event.target.value);
+                                setTerminalDraftHistoryCursor(-1);
+                                setIsDraftHistoryOpen(false);
+                              }}
+                              onClick={(event) => {
+                                if (!allowPreInputKeyboard) {
+                                  event.preventDefault();
+                                  toast.message('请先点击键盘按钮，再点击输入栏调出系统键盘。');
+                                }
+                              }}
+                              onPointerDown={(event) => {
+                                if (!allowPreInputKeyboard) {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                }
+                              }}
+                              onTouchStart={(event) => {
+                                if (!allowPreInputKeyboard) {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                }
+                              }}
+                              onFocus={() => {
+                                if (!allowPreInputKeyboard) {
+                                  terminalPreInputRef.current?.blur();
+                                  return;
+                                }
+                                window.setTimeout(() => {
+                                  terminalPreInputRef.current?.scrollIntoView({
+                                    behavior: 'smooth',
+                                    block: 'nearest',
+                                    inline: 'nearest'
+                                  });
+                                }, 80);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === 'ArrowUp') {
+                                  if (terminalDraftHistory.length === 0) {
+                                    return;
+                                  }
+                                  event.preventDefault();
+                                  const nextCursor =
+                                    terminalDraftHistoryCursor < 0
+                                      ? terminalDraftHistory.length - 1
+                                      : Math.max(0, terminalDraftHistoryCursor - 1);
+                                  if (terminalDraftHistoryCursor < 0) {
+                                    setTerminalDraftSnapshot(terminalDraftCommand);
+                                  }
+                                  setTerminalDraftHistoryCursor(nextCursor);
+                                  const nextCommand = terminalDraftHistory[nextCursor] ?? '';
+                                  setTerminalDraftCommand(nextCommand);
+                                  return;
+                                }
+                                if (event.key === 'ArrowDown') {
+                                  if (terminalDraftHistory.length === 0 || terminalDraftHistoryCursor < 0) {
+                                    return;
+                                  }
+                                  event.preventDefault();
+                                  if (terminalDraftHistoryCursor >= terminalDraftHistory.length - 1) {
+                                    setTerminalDraftHistoryCursor(-1);
+                                    setTerminalDraftCommand(terminalDraftSnapshot);
+                                    return;
+                                  }
+                                  const nextCursor = Math.min(
+                                    terminalDraftHistory.length - 1,
+                                    terminalDraftHistoryCursor + 1
+                                  );
+                                  setTerminalDraftHistoryCursor(nextCursor);
+                                  setTerminalDraftCommand(terminalDraftHistory[nextCursor] ?? '');
+                                  return;
+                                }
+                                if (event.key === 'Enter' && !event.shiftKey) {
+                                  event.preventDefault();
+                                  void executeDraftCommand();
+                                }
+                              }}
+                              placeholder={
+                                activeTerminalSessionId
+                                  ? uiText.terminalPreInputPlaceholder
+                                  : uiText.terminalPreInputDisabled
+                              }
+                              rows={1}
+                              style={{
+                                borderColor: toRgba(activeThemePreset.terminalBorder, 0.68),
+                                background: toRgba(activeThemePreset.terminalSurfaceHex, 0.7),
+                                color: activeThemePreset.terminalTheme.foreground ?? '#dce9ff'
+                              }}
+                              value={terminalDraftCommand}
+                            />
+                            <button
+                              aria-label={isMobilePortraitKeyboardInputEnabled ? '关闭键盘' : '打开键盘'}
+                              className={terminalDraftActionButtonClass}
+                              onClick={() => {
+                                handleToggleMobileKeyboardInput();
+                              }}
+                              title={isMobilePortraitKeyboardInputEnabled ? '关闭键盘' : '打开键盘'}
+                              type="button"
+                            >
+                              <span aria-hidden="true">⌨</span>
+                              <span>{isMobilePortraitKeyboardInputEnabled ? '键盘关' : '键盘开'}</span>
+                            </button>
+                            <button
+                              aria-label="打开终端操作面板"
+                              className={terminalDraftActionButtonClass}
+                              onClick={() => {
+                                setIsMobileTerminalSheetOpen(true);
+                                void triggerMobileHaptic('light');
+                              }}
+                              title="打开更多操作"
+                              type="button"
+                            >
+                              <span aria-hidden="true">⋮</span>
+                              <span>工具</span>
+                            </button>
+                            <button
+                              className={`${terminalDraftActionButtonClass} disabled:cursor-not-allowed disabled:opacity-55`}
+                              disabled={!activeTerminalSessionId || !terminalDraftCommand.trim()}
+                              onClick={() => {
+                                void executeDraftCommand();
+                              }}
+                              title="发送并执行"
+                              type="button"
+                            >
+                              <span aria-hidden="true">↵</span>
+                              <span>发送</span>
+                            </button>
+                          </div>
+
+                          {isMobilePortraitKeyboardInputEnabled && (
+                            <div className="mt-1 flex items-center gap-1 overflow-x-auto pb-0.5">
                               <button
-                                className="block w-full truncate rounded px-2 py-1 text-left hover:bg-white/10"
-                                key={`${item}-${index}`}
+                                className={terminalDraftActionButtonClass}
                                 onClick={() => {
-                                  setTerminalDraftCommand(item);
+                                  void handleSendMobileAccessoryKey('tab');
+                                }}
+                                type="button"
+                              >
+                                Tab
+                              </button>
+                              <button
+                                className={`${terminalDraftActionButtonClass} ${
+                                  mobileCtrlModifierEnabled ? 'border-[#3b82f6] bg-[#173056]' : ''
+                                }`}
+                                onClick={() => {
+                                  void handleSendMobileAccessoryKey('ctrl');
+                                }}
+                                type="button"
+                              >
+                                Ctrl
+                              </button>
+                              <button
+                                className={`${terminalDraftActionButtonClass} ${
+                                  mobileAltModifierEnabled ? 'border-[#3b82f6] bg-[#173056]' : ''
+                                }`}
+                                onClick={() => {
+                                  void handleSendMobileAccessoryKey('alt');
+                                }}
+                                type="button"
+                              >
+                                Alt
+                              </button>
+                              <button
+                                className={terminalDraftActionButtonClass}
+                                onClick={() => {
+                                  void handleSendMobileAccessoryKey('esc');
+                                }}
+                                type="button"
+                              >
+                                Esc
+                              </button>
+                              <button
+                                className={terminalDraftActionButtonClass}
+                                onClick={() => {
+                                  void handleSendMobileAccessoryKey('left');
+                                }}
+                                type="button"
+                              >
+                                ←
+                              </button>
+                              <button
+                                className={terminalDraftActionButtonClass}
+                                onClick={() => {
+                                  void handleSendMobileAccessoryKey('up');
+                                }}
+                                type="button"
+                              >
+                                ↑
+                              </button>
+                              <button
+                                className={terminalDraftActionButtonClass}
+                                onClick={() => {
+                                  void handleSendMobileAccessoryKey('down');
+                                }}
+                                type="button"
+                              >
+                                ↓
+                              </button>
+                              <button
+                                className={terminalDraftActionButtonClass}
+                                onClick={() => {
+                                  void handleSendMobileAccessoryKey('right');
+                                }}
+                                type="button"
+                              >
+                                →
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div
+                          className="absolute bottom-2 right-2 z-20 w-[min(720px,calc(100%-1rem))] shrink-0 rounded-[var(--radius)] border px-2 pt-2 pb-1 shadow-xl"
+                          style={{
+                            borderColor: toRgba(activeThemePreset.terminalBorder, 0.42),
+                            background: toRgba(activeThemePreset.terminalSurfaceHex, 0.94)
+                          }}
+                        >
+                          <div className="flex items-end gap-2">
+                            <div className="min-w-0 flex-1">
+                              <label
+                                className="mb-1 block text-[11px]"
+                                htmlFor="terminal-pre-input"
+                                style={{ color: toRgba(activeThemePreset.terminalBorder, 0.95) }}
+                              >
+                                {uiText.terminalPreInputLabel}
+                              </label>
+                              <textarea
+                                className="w-full resize-none rounded-md border px-3 py-1.5 text-xs outline-none placeholder:text-slate-400"
+                                disabled={!activeTerminalSessionId}
+                                id="terminal-pre-input"
+                                ref={terminalPreInputRef}
+                                onChange={(event) => {
+                                  setTerminalDraftCommand(event.target.value);
                                   setTerminalDraftHistoryCursor(-1);
                                   setIsDraftHistoryOpen(false);
                                 }}
-                                style={{ color: activeThemePreset.terminalTheme.foreground ?? '#dce9ff' }}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'ArrowUp') {
+                                    if (terminalDraftHistory.length === 0) {
+                                      return;
+                                    }
+                                    event.preventDefault();
+                                    const nextCursor =
+                                      terminalDraftHistoryCursor < 0
+                                        ? terminalDraftHistory.length - 1
+                                        : Math.max(0, terminalDraftHistoryCursor - 1);
+                                    if (terminalDraftHistoryCursor < 0) {
+                                      setTerminalDraftSnapshot(terminalDraftCommand);
+                                    }
+                                    setTerminalDraftHistoryCursor(nextCursor);
+                                    const nextCommand = terminalDraftHistory[nextCursor] ?? '';
+                                    setTerminalDraftCommand(nextCommand);
+                                    return;
+                                  }
+                                  if (event.key === 'ArrowDown') {
+                                    if (terminalDraftHistory.length === 0 || terminalDraftHistoryCursor < 0) {
+                                      return;
+                                    }
+                                    event.preventDefault();
+                                    if (terminalDraftHistoryCursor >= terminalDraftHistory.length - 1) {
+                                      setTerminalDraftHistoryCursor(-1);
+                                      setTerminalDraftCommand(terminalDraftSnapshot);
+                                      return;
+                                    }
+                                    const nextCursor = Math.min(
+                                      terminalDraftHistory.length - 1,
+                                      terminalDraftHistoryCursor + 1
+                                    );
+                                    setTerminalDraftHistoryCursor(nextCursor);
+                                    setTerminalDraftCommand(terminalDraftHistory[nextCursor] ?? '');
+                                    return;
+                                  }
+                                  if (event.key === 'Enter' && !event.shiftKey) {
+                                    event.preventDefault();
+                                    void executeDraftCommand();
+                                  }
+                                }}
+                                placeholder={
+                                  activeTerminalSessionId
+                                    ? uiText.terminalPreInputPlaceholder
+                                    : uiText.terminalPreInputDisabled
+                                }
+                                rows={1}
+                                style={{
+                                  borderColor: toRgba(activeThemePreset.terminalBorder, 0.68),
+                                  background: toRgba(activeThemePreset.terminalSurfaceHex, 0.68),
+                                  color: activeThemePreset.terminalTheme.foreground ?? '#dce9ff'
+                                }}
+                                value={terminalDraftCommand}
+                              />
+                              {isDraftHistoryOpen && draftHistoryPreview.length > 0 && (
+                                <div
+                                  className="mt-1.5 max-h-44 overflow-auto rounded-md border p-1 text-[11px]"
+                                  style={{
+                                    borderColor: toRgba(activeThemePreset.terminalBorder, 0.52),
+                                    background: toRgba(activeThemePreset.terminalSurfaceHex, 0.86)
+                                  }}
+                                >
+                                  {draftHistoryPreview.map((item, index) => (
+                                    <button
+                                      className="block w-full truncate rounded px-2 py-1 text-left hover:bg-white/10"
+                                      key={`${item}-${index}`}
+                                      onClick={() => {
+                                        setTerminalDraftCommand(item);
+                                        setTerminalDraftHistoryCursor(-1);
+                                        setIsDraftHistoryOpen(false);
+                                      }}
+                                      style={{ color: activeThemePreset.terminalTheme.foreground ?? '#dce9ff' }}
+                                      type="button"
+                                    >
+                                      {item}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex shrink-0 flex-col gap-1">
+                              <button
+                                className={darkPanelButtonClass}
+                                onClick={() => {
+                                  setIsDraftHistoryOpen((prev) => !prev);
+                                }}
                                 type="button"
                               >
-                                {item}
+                                历史命令
                               </button>
-                            ))}
+                              <button
+                                className={`${darkPanelButtonClass} disabled:cursor-not-allowed disabled:opacity-55`}
+                                disabled={!activeTerminalSessionId || !terminalDraftCommand.trim()}
+                                onClick={() => {
+                                  void executeDraftCommand();
+                                }}
+                                type="button"
+                              >
+                                发送执行
+                              </button>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  className={darkPanelButtonClass}
+                                  onClick={() => {
+                                    setTerminalLineHeight(Math.max(1, terminalLineHeight - 0.1));
+                                  }}
+                                  type="button"
+                                >
+                                  行距-
+                                </button>
+                                <span className="min-w-[52px] text-center text-[11px] text-[#b8c9e6]">
+                                  {terminalLineHeight.toFixed(2)}x
+                                </span>
+                                <button
+                                  className={darkPanelButtonClass}
+                                  onClick={() => {
+                                    setTerminalLineHeight(Math.min(2.4, terminalLineHeight + 0.1));
+                                  }}
+                                  type="button"
+                                >
+                                  行距+
+                                </button>
+                              </div>
+                              <button
+                                className={darkPanelButtonClass}
+                                onClick={() => {
+                                  setSnippetsPanelCollapsed(!snippetsPanelCollapsed);
+                                }}
+                                type="button"
+                              >
+                                {snippetsPanelCollapsed ? uiText.terminalSnippetOpen : uiText.terminalSnippetClose}
+                              </button>
+                            </div>
                           </div>
-                        )}
-                      </div>
-                      <div className={`flex shrink-0 ${isMobileRuntime && isMobileLandscape ? 'flex-wrap' : 'flex-col'} gap-1`}>
-                        {isMobileRuntime && (
-                          <div className="flex items-center gap-1">
-                            <button
-                              className={terminalDraftActionButtonClass}
-                              onClick={() => {
-                                void handleCopyTerminalOutput('visible');
-                              }}
-                              type="button"
-                            >
-                              复制可见
-                            </button>
-                            <button
-                              className={terminalDraftActionButtonClass}
-                              onClick={() => {
-                                void handleCopyTerminalOutput('all');
-                              }}
-                              type="button"
-                            >
-                              复制全部
-                            </button>
-                          </div>
-                        )}
-                        <button
-                          className={isMobileRuntime ? terminalDraftActionButtonClass : darkPanelButtonClass}
-                          onClick={() => {
-                            setIsDraftHistoryOpen((prev) => !prev);
-                          }}
-                          type="button"
-                        >
-                          历史命令
-                        </button>
-                        <button
-                          className={`${
-                            isMobileRuntime ? terminalDraftActionButtonClass : darkPanelButtonClass
-                          } disabled:cursor-not-allowed disabled:opacity-55`}
-                          disabled={!activeTerminalSessionId || !terminalDraftCommand.trim()}
-                          onClick={() => {
-                            void executeDraftCommand();
-                          }}
-                          type="button"
-                        >
-                          发送执行
-                        </button>
-                        {isMobileRuntime && (
-                          <button
-                            className={terminalDraftActionButtonClass}
-                            onClick={() => {
-                              handleToggleMobileKeyboardInput();
-                            }}
-                            type="button"
-                          >
-                            {isMobilePortraitKeyboardInputEnabled ? '关闭键盘' : '键盘输入'}
-                          </button>
-                        )}
-                        {!isMobileRuntime && (
-                          <div className="flex items-center gap-1">
-                            <button
-                              className={darkPanelButtonClass}
-                              onClick={() => {
-                                setTerminalLineHeight(Math.max(1, terminalLineHeight - 0.1));
-                              }}
-                              type="button"
-                            >
-                              行距-
-                            </button>
-                            <span className="min-w-[52px] text-center text-[11px] text-[#b8c9e6]">
-                              {terminalLineHeight.toFixed(2)}x
-                            </span>
-                            <button
-                              className={darkPanelButtonClass}
-                              onClick={() => {
-                                setTerminalLineHeight(Math.min(2.4, terminalLineHeight + 0.1));
-                              }}
-                              type="button"
-                            >
-                              行距+
-                            </button>
-                          </div>
-                        )}
-                        {!isMobileRuntime && (
-                          <button
-                            className={darkPanelButtonClass}
-                            onClick={() => {
-                              setSnippetsPanelCollapsed(!snippetsPanelCollapsed);
-                            }}
-                            type="button"
-                          >
-                            {snippetsPanelCollapsed ? uiText.terminalSnippetOpen : uiText.terminalSnippetClose}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
 
-              {!isSftpCollapsed && !isMobileRuntime && (
+              {!isMobileRuntime && isActiveSessionSsh && (
                 <>
-                  {!isMobileLayout && (
+                  {!isMobileLayout && isSftpCollapsed && (
+                    <button
+                      aria-label="展开 SFTP 抽屉"
+                      className="h-full w-1.5 shrink-0 rounded-[var(--radius)] bg-slate-700/45 hover:bg-slate-500/75"
+                      onClick={() => {
+                        setIsSftpCollapsed(false);
+                      }}
+                      title="展开 SFTP (Cmd/Ctrl+B)"
+                      type="button"
+                    />
+                  )}
+                  {!isMobileLayout && !isSftpCollapsed && (
                     <div
                       aria-label="调整终端与 SFTP 分栏宽度"
-                      className={`relative h-full w-2 shrink-0 rounded bg-[#223756] transition hover:bg-[#355a89] ${
-                        isResizingSplit ? 'cursor-col-resize bg-[#4e78ab]' : 'cursor-col-resize'
+                      className={`relative h-full w-1.5 shrink-0 rounded-[var(--radius)] bg-slate-700/55 transition hover:bg-slate-500/80 ${
+                        isResizingSplit ? 'cursor-col-resize bg-slate-400/85' : 'cursor-col-resize'
                       }`}
                       onPointerDown={(event) => {
                         event.preventDefault();
@@ -6044,8 +7325,17 @@ function App(): JSX.Element {
                     />
                   )}
                   <div
-                    className={`overflow-hidden ${isMobileLayout ? 'h-[42%] w-full shrink-0' : 'h-full shrink-0'}`}
-                    style={isMobileLayout ? undefined : { width: `${sftpPanelWidth}px` }}
+                    className={`overflow-hidden transition-[width,opacity,transform] duration-150 ease-in-out ${
+                      isMobileLayout ? 'h-[42%] w-full shrink-0' : 'h-full shrink-0'
+                    } ${isSftpCollapsed ? 'pointer-events-none opacity-0' : 'opacity-100'}`}
+                    style={
+                      isMobileLayout
+                        ? undefined
+                        : {
+                            width: `${isSftpCollapsed ? 0 : sftpPanelWidth}px`,
+                            transform: isSftpCollapsed ? 'translateX(8px)' : 'translateX(0)'
+                          }
+                    }
                   >
                     <SftpManager
                       className="h-full"
@@ -6299,15 +7589,19 @@ function App(): JSX.Element {
                 <p className="mt-1 text-sm text-slate-700">按步骤填写连接信息，保存后自动写入本地加密金库。</p>
               </div>
               <button
-                className={toolbarButtonClass}
+                className="rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/70 px-3 py-1.5 text-xs font-semibold text-slate-100 hover:bg-slate-800/80"
                 onClick={handleCloseHostWizard}
                 type="button"
               >
-                关闭
+                关闭向导
               </button>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-auto px-5 py-5">
+            <div
+              className={`min-h-0 flex-1 overflow-auto px-5 py-5 ${
+                isMobileLayout ? 'pb-[calc(8.2rem+env(safe-area-inset-bottom))]' : ''
+              }`}
+            >
               <StepIndicator currentStep={currentStep} />
 
               <div className="mt-4 rounded-2xl border border-white/65 bg-white/60 p-5">
@@ -6421,7 +7715,10 @@ function App(): JSX.Element {
                           {host.basicInfo.name || `${host.basicInfo.address}:${host.basicInfo.port}`}
                         </p>
                         <p className="mt-1 text-xs text-[#9fb5d7]">
-                          {(identity?.username ?? 'unknown')}@{host.basicInfo.address}:{host.basicInfo.port}
+                          {resolveProtocolLabel(host.basicInfo.protocol ?? 'ssh', locale)} ·{' '}
+                          {(host.basicInfo.protocol ?? 'ssh') === 'serial'
+                            ? host.basicInfo.serialPath || 'serial-device'
+                            : `${identity?.username ?? 'unknown'}@${host.basicInfo.address}:${host.basicInfo.port}`}
                         </p>
                       </button>
                     );
@@ -6440,7 +7737,11 @@ function App(): JSX.Element {
                   </button>
                   <button
                     className="rounded-lg border border-[#4d76ab] bg-[#1a3254] px-3 py-1.5 text-xs font-semibold text-[#e2efff] hover:bg-[#24426b] disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={!selectedTabHost || isConnectingTerminal}
+                    disabled={
+                      !selectedTabHost ||
+                      isConnectingTerminal ||
+                      ((selectedTabHost.basicInfo.protocol ?? 'ssh') === 'serial' && isMobileRuntime)
+                    }
                     onClick={() => {
                       void handleConnectFromNewTabModal();
                     }}
@@ -6513,6 +7814,7 @@ function App(): JSX.Element {
           setSettingsFocusSequence((prev) => prev + 1);
         }}
         onOpenAbout={() => {
+          setIsSettingsOpen(false);
           setIsAboutOpen(true);
         }}
         onOpenCloudAuth={() => {
@@ -6520,6 +7822,10 @@ function App(): JSX.Element {
           setSkippedCloudAuthForCurrentUnlock(false);
           setIsSettingsOpen(false);
         }}
+        onOpenInspector={() => {
+          setIsInspectorOpen(true);
+        }}
+        onRunSyncSelfHeal={runSyncSelfHeal}
         open={isSettingsOpen}
       />
 

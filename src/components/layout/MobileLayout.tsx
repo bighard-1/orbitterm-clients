@@ -1,6 +1,6 @@
 import type { OrbitUiPalette } from '../../theme/orbitTheme';
 
-export type MobileNavTab = 'hosts' | 'sessions' | 'tools' | 'settings';
+export type MobileNavTab = 'hosts' | 'sessions' | 'settings';
 
 interface MobileLayoutProps {
   activeTab: MobileNavTab;
@@ -20,7 +20,6 @@ const resolveTabItems = (locale: string): TabItem[] => {
     return [
       { id: 'hosts', icon: '🧭', label: '資產' },
       { id: 'sessions', icon: '⌨️', label: '會話' },
-      { id: 'tools', icon: '🧰', label: '工具' },
       { id: 'settings', icon: '⚙️', label: '設定' }
     ];
   }
@@ -28,7 +27,6 @@ const resolveTabItems = (locale: string): TabItem[] => {
     return [
       { id: 'hosts', icon: '🧭', label: 'ホスト' },
       { id: 'sessions', icon: '⌨️', label: 'セッション' },
-      { id: 'tools', icon: '🧰', label: 'ツール' },
       { id: 'settings', icon: '⚙️', label: '設定' }
     ];
   }
@@ -36,14 +34,12 @@ const resolveTabItems = (locale: string): TabItem[] => {
     return [
       { id: 'hosts', icon: '🧭', label: 'Hosts' },
       { id: 'sessions', icon: '⌨️', label: 'Sessions' },
-      { id: 'tools', icon: '🧰', label: 'Tools' },
       { id: 'settings', icon: '⚙️', label: 'Settings' }
     ];
   }
   return [
     { id: 'hosts', icon: '🧭', label: '资产' },
     { id: 'sessions', icon: '⌨️', label: '会话' },
-    { id: 'tools', icon: '🧰', label: '工具' },
     { id: 'settings', icon: '⚙️', label: '设置' }
   ];
 };
@@ -58,7 +54,9 @@ export function MobileLayout({
 
   return (
     <nav
-      className="fixed bottom-2 left-2 right-2 z-[220] grid grid-cols-4 gap-1 rounded-2xl border p-1.5 shadow-2xl backdrop-blur-xl"
+      aria-label="Primary navigation"
+      className="ot-mobile-nav fixed bottom-2 left-2 right-2 z-[220] grid grid-cols-3 gap-1 rounded-[var(--radius)] border p-1.5 backdrop-blur-xl"
+      role="tablist"
       style={{
         borderColor: palette.panelBorder,
         background: palette.panelBackground,
@@ -69,20 +67,25 @@ export function MobileLayout({
         const active = item.id === activeTab;
         return (
           <button
-            className={`inline-flex min-h-11 flex-col items-center justify-center rounded-xl px-2 py-2 text-[11px] font-semibold ${
+            aria-current={active ? 'page' : undefined}
+            aria-label={item.label}
+            className={`ot-mobile-nav-btn inline-flex min-h-11 flex-col items-center justify-center rounded-[var(--radius)] border px-2 py-2 text-[11px] font-semibold ${
               active ? 'text-white' : 'text-[#d8e8ff]'
             }`}
             key={item.id}
             onClick={() => {
               onTabChange(item.id);
             }}
+            role="tab"
             style={
               active
                 ? {
-                    background: palette.accent
+                    background: palette.accent,
+                    borderColor: palette.accent
                   }
                 : {
-                    background: 'rgba(255,255,255,0.08)'
+                    background: 'rgba(255,255,255,0.04)',
+                    borderColor: 'rgba(148,163,184,0.25)'
                   }
             }
             type="button"

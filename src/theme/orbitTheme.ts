@@ -94,8 +94,7 @@ const ABYSS_THEME: OrbitThemePreset = {
   id: 'abyss',
   name: 'Abyss Default',
   description: '默认主题，深蓝冷调，平衡信息密度与观感。',
-  bodyBackground:
-    'radial-gradient(circle at 10% 16%, rgba(88, 166, 255, 0.48), transparent 34%), radial-gradient(circle at 84% 12%, rgba(48, 120, 220, 0.38), transparent 32%), radial-gradient(circle at 52% 86%, rgba(126, 198, 255, 0.48), transparent 42%), linear-gradient(135deg, #dce9ff 0%, #c9ddff 50%, #ecf4ff 100%)',
+  bodyBackground: 'linear-gradient(160deg, #0f1218 0%, #111620 100%)',
   terminalSurfaceHex: '#0b1220',
   terminalBorder: '#2e4670',
   terminalTheme: {
@@ -128,8 +127,7 @@ export const ORBIT_THEME_PRESETS: ReadonlyArray<OrbitThemePreset> = [
     id: 'basalt_dark',
     name: '玄武岩石 (Basalt Dark)',
     description: '沉浸式极客办公：深石墨基底，低眩光高可读。',
-    bodyBackground:
-      'radial-gradient(circle at 12% 16%, rgba(112, 192, 232, 0.16), transparent 36%), radial-gradient(circle at 86% 18%, rgba(255, 158, 100, 0.14), transparent 34%), linear-gradient(136deg, #1a1d22 0%, #1e2227 56%, #171a1f 100%)',
+    bodyBackground: 'linear-gradient(160deg, #15191f 0%, #1a1f27 100%)',
     terminalSurfaceHex: '#1e2227',
     terminalBorder: '#3a414c',
     terminalTheme: {
@@ -159,8 +157,7 @@ export const ORBIT_THEME_PRESETS: ReadonlyArray<OrbitThemePreset> = [
     id: 'mossy_ink',
     name: '青苔古砚 (Mossy Ink)',
     description: '极致护眼专注：暗绿墨底色，长时间阅读更稳。',
-    bodyBackground:
-      'radial-gradient(circle at 14% 16%, rgba(152, 195, 121, 0.16), transparent 36%), radial-gradient(circle at 82% 20%, rgba(97, 175, 239, 0.14), transparent 34%), linear-gradient(136deg, #1c211d 0%, #222924 55%, #171d19 100%)',
+    bodyBackground: 'linear-gradient(160deg, #171c19 0%, #1e2420 100%)',
     terminalSurfaceHex: '#222924',
     terminalBorder: '#3f4b43',
     terminalTheme: {
@@ -190,8 +187,7 @@ export const ORBIT_THEME_PRESETS: ReadonlyArray<OrbitThemePreset> = [
     id: 'warm_parchment',
     name: '暖阳宣纸 (Warm Parchment)',
     description: '清晰阅读模式：暖白纸感，减少数字屏疲劳。',
-    bodyBackground:
-      'radial-gradient(circle at 15% 12%, rgba(226, 193, 127, 0.22), transparent 38%), radial-gradient(circle at 82% 16%, rgba(152, 104, 1, 0.18), transparent 36%), linear-gradient(135deg, #2f2922 0%, #2a231d 58%, #241e18 100%)',
+    bodyBackground: 'linear-gradient(160deg, #26211b 0%, #2d261f 100%)',
     terminalSurfaceHex: '#2c241d',
     terminalBorder: '#6e5b46',
     terminalTheme: {
@@ -430,60 +426,60 @@ export const resolveUiPalette = (id: OrbitThemePresetId): OrbitUiPalette => {
   switch (id) {
     case 'basalt_dark':
       return {
-        shellBackground: 'linear-gradient(140deg, rgba(25, 28, 34, 0.95) 0%, rgba(30, 34, 39, 0.96) 56%, rgba(23, 26, 31, 0.95) 100%)',
-        shellBorder: 'rgba(88, 97, 110, 0.46)',
-        headerBackground: 'rgba(24, 27, 33, 0.88)',
-        headerBorder: 'rgba(88, 97, 110, 0.38)',
-        softSurface: 'rgba(34, 39, 46, 0.82)',
-        panelBackground: 'rgba(28, 32, 38, 0.92)',
-        panelBorder: 'rgba(88, 97, 110, 0.32)',
-        accent: '#70C0E8',
-        accentSoft: 'rgba(112, 192, 232, 0.18)',
+        shellBackground: 'rgba(15, 18, 24, 0.96)',
+        shellBorder: 'rgba(100, 116, 139, 0.34)',
+        headerBackground: 'rgba(17, 22, 29, 0.88)',
+        headerBorder: 'rgba(100, 116, 139, 0.3)',
+        softSurface: 'rgba(30, 36, 45, 0.8)',
+        panelBackground: 'rgba(20, 24, 31, 0.88)',
+        panelBorder: 'rgba(100, 116, 139, 0.25)',
+        accent: '#3B82F6',
+        accentSoft: 'rgba(59, 130, 246, 0.16)',
         textPrimary: '#E6ECF4',
         textMuted: '#ABB2BF'
       };
     case 'mossy_ink':
       return {
-        shellBackground: 'linear-gradient(140deg, rgba(29, 34, 30, 0.95) 0%, rgba(34, 41, 36, 0.95) 56%, rgba(23, 29, 25, 0.95) 100%)',
-        shellBorder: 'rgba(95, 113, 100, 0.46)',
-        headerBackground: 'rgba(28, 33, 29, 0.88)',
-        headerBorder: 'rgba(95, 113, 100, 0.38)',
-        softSurface: 'rgba(40, 48, 42, 0.82)',
-        panelBackground: 'rgba(33, 40, 35, 0.92)',
-        panelBorder: 'rgba(95, 113, 100, 0.32)',
-        accent: '#98C379',
-        accentSoft: 'rgba(152, 195, 121, 0.18)',
+        shellBackground: 'rgba(14, 18, 17, 0.96)',
+        shellBorder: 'rgba(100, 116, 139, 0.34)',
+        headerBackground: 'rgba(18, 23, 21, 0.88)',
+        headerBorder: 'rgba(100, 116, 139, 0.3)',
+        softSurface: 'rgba(32, 39, 36, 0.8)',
+        panelBackground: 'rgba(19, 25, 22, 0.88)',
+        panelBorder: 'rgba(100, 116, 139, 0.25)',
+        accent: '#3B82F6',
+        accentSoft: 'rgba(59, 130, 246, 0.16)',
         textPrimary: '#E4ECE4',
         textMuted: '#A9B7AA'
       };
     case 'warm_parchment':
       return {
-        shellBackground: 'linear-gradient(138deg, rgba(50, 42, 34, 0.96) 0%, rgba(43, 35, 28, 0.95) 55%, rgba(37, 30, 24, 0.96) 100%)',
-        shellBorder: 'rgba(142, 120, 90, 0.52)',
-        headerBackground: 'rgba(58, 48, 38, 0.9)',
-        headerBorder: 'rgba(142, 120, 90, 0.4)',
-        softSurface: 'rgba(70, 58, 46, 0.84)',
-        panelBackground: 'rgba(47, 39, 31, 0.92)',
-        panelBorder: 'rgba(142, 120, 90, 0.34)',
-        accent: '#E2C17F',
-        accentSoft: 'rgba(226, 193, 127, 0.16)',
+        shellBackground: 'rgba(31, 26, 22, 0.96)',
+        shellBorder: 'rgba(120, 113, 108, 0.4)',
+        headerBackground: 'rgba(36, 30, 25, 0.88)',
+        headerBorder: 'rgba(120, 113, 108, 0.32)',
+        softSurface: 'rgba(45, 37, 31, 0.82)',
+        panelBackground: 'rgba(32, 27, 22, 0.88)',
+        panelBorder: 'rgba(120, 113, 108, 0.24)',
+        accent: '#3B82F6',
+        accentSoft: 'rgba(59, 130, 246, 0.16)',
         textPrimary: '#F4EBDD',
         textMuted: '#CDBDA7'
       };
     case 'abyss':
     default:
       return {
-        shellBackground: 'linear-gradient(140deg, rgba(236,244,255,0.88) 0%, rgba(220,233,255,0.92) 52%, rgba(241,247,255,0.9) 100%)',
-        shellBorder: 'rgba(112, 146, 198, 0.42)',
-        headerBackground: 'rgba(239, 246, 255, 0.9)',
-        headerBorder: 'rgba(116, 149, 202, 0.34)',
-        softSurface: 'rgba(231, 241, 255, 0.78)',
-        panelBackground: 'rgba(247, 251, 255, 0.88)',
-        panelBorder: 'rgba(123, 154, 206, 0.28)',
-        accent: '#2f6df4',
-        accentSoft: 'rgba(47, 109, 244, 0.12)',
-        textPrimary: '#1f3557',
-        textMuted: '#4b6489'
+        shellBackground: 'rgba(12, 15, 21, 0.96)',
+        shellBorder: 'rgba(100, 116, 139, 0.32)',
+        headerBackground: 'rgba(14, 18, 25, 0.88)',
+        headerBorder: 'rgba(100, 116, 139, 0.28)',
+        softSurface: 'rgba(24, 31, 43, 0.8)',
+        panelBackground: 'rgba(17, 23, 33, 0.86)',
+        panelBorder: 'rgba(100, 116, 139, 0.24)',
+        accent: '#3B82F6',
+        accentSoft: 'rgba(59, 130, 246, 0.14)',
+        textPrimary: '#DFE7F5',
+        textMuted: '#98A7C0'
       };
   }
 };

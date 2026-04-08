@@ -27,6 +27,7 @@ export function Step2(): JSX.Element {
   });
 
   const method = watch('method');
+  const protocol = basicInfo.protocol ?? 'ssh';
   const selectedIdentity = identities.find((identity) => identity.id === basicInfo.identityId);
 
   if (basicInfo.identityMode === 'existing') {
@@ -68,6 +69,16 @@ export function Step2(): JSX.Element {
   }
 
   const onSubmit = (values: Step2FormValues): void => {
+    if (protocol === 'serial') {
+      values.method = 'none';
+      values.password = '';
+      values.privateKey = '';
+      values.passphrase = '';
+    } else if (protocol === 'telnet') {
+      values.method = 'password';
+      values.privateKey = '';
+      values.passphrase = '';
+    }
     updateAuthConfig(values);
     nextStep();
   };
@@ -77,21 +88,44 @@ export function Step2(): JSX.Element {
       <div className="space-y-3 rounded-2xl border border-white/60 bg-white/55 p-4">
         <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
           认证方式
-          <Tooltip content="推荐生产环境使用“私钥认证”。密码认证配置简单，但安全性依赖口令强度与策略。" />
+          <Tooltip
+            content={
+              protocol === 'serial'
+                ? '串口连接通常不在应用层做用户名密码认证。'
+                : protocol === 'telnet'
+                  ? 'Telnet 不支持私钥认证，建议使用密码并配合网络访问控制。'
+                  : '推荐生产环境使用“私钥认证”。密码认证配置简单，但安全性依赖口令强度与策略。'
+            }
+          />
         </label>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/70 bg-white/70 p-3 text-sm text-slate-700">
-            <input type="radio" value="password" {...register('method')} />
-            密码认证
-          </label>
-          <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/70 bg-white/70 p-3 text-sm text-slate-700">
-            <input type="radio" value="privateKey" {...register('method')} />
-            私钥认证
-          </label>
-        </div>
+        {protocol === 'serial' ? (
+          <div className="rounded-xl border border-white/70 bg-white/70 p-3 text-sm text-slate-700">
+            Serial 本地连接无需应用层认证，下一步可直接保存。
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/70 bg-white/70 p-3 text-sm text-slate-700">
+              <input type="radio" value="password" {...register('method')} />
+              密码认证
+            </label>
+            <label
+              className={`flex items-center gap-2 rounded-xl border border-white/70 bg-white/70 p-3 text-sm ${
+                protocol === 'telnet' ? 'cursor-not-allowed text-slate-400' : 'cursor-pointer text-slate-700'
+              }`}
+            >
+              <input
+                disabled={protocol === 'telnet'}
+                type="radio"
+                value="privateKey"
+                {...register('method')}
+              />
+              私钥认证
+            </label>
+          </div>
+        )}
       </div>
 
-      {method === 'password' && (
+      {protocol !== 'serial' && method === 'password' && (
         <div className="space-y-2">
           <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
             登录密码
@@ -102,7 +136,7 @@ export function Step2(): JSX.Element {
         </div>
       )}
 
-      {method === 'privateKey' && (
+      {protocol === 'ssh' && method === 'privateKey' && (
         <div className="space-y-5">
           <div className="space-y-2">
             <label className="flex items-center gap-2 text-sm font-medium text-slate-700">

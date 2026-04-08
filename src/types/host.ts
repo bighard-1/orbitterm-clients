@@ -1,10 +1,15 @@
-export type AuthMethod = 'password' | 'privateKey';
+export type HostProtocol = 'ssh' | 'telnet' | 'serial';
+export type AuthMethod = 'none' | 'password' | 'privateKey';
 
 export interface HostBasicInfo {
   name: string;
+  group: string;
   address: string;
   port: number;
   description: string;
+  protocol: HostProtocol;
+  serialPath: string;
+  serialBaudRate: number;
 }
 
 export interface HostAuthConfig {

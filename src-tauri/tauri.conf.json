@@ -23,7 +23,7 @@
   },
   "productName": "OrbitTerm",
   "mainBinaryName": "OrbitTerm",
-  "version": "0.1.87",
+  "version": "0.1.88",
   "identifier": "com.biglinfei.orbitterm",
   "plugins": {
     "updater": {

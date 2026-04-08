@@ -55,7 +55,7 @@ export function AboutOrbitTermModal({ open, onClose, releaseNotice }: AboutOrbit
   }
 
   return (
-    <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[380] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
       <div className="w-full max-w-2xl rounded-3xl border border-white/30 bg-[#0a1321]/85 p-6 text-slate-100 shadow-2xl backdrop-blur-2xl sm:p-7">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-3">

@@ -1,7 +1,9 @@
 import { zodResolver } from '@hookform/resolvers/zod';
+import { useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { step1Schema, type Step1FormValues } from '../../schemas/hostSchemas';
 import { useHostStore } from '../../store/useHostStore';
+import { detectMobileFormFactor, isAndroidRuntime } from '../../services/runtime';
 import { Tooltip } from './Tooltip';
 
 const inputClassName =
@@ -24,10 +26,17 @@ export function Step1(): JSX.Element {
     mode: 'onBlur'
   });
 
+  const isMobileRuntime = useMemo(() => detectMobileFormFactor() || isAndroidRuntime(), []);
   const identityMode = watch('identityMode');
+  const protocol = watch('protocol');
   const hasIdentities = identities.length > 0;
 
   const onSubmit = (values: Step1FormValues): void => {
+    if (values.protocol === 'serial') {
+      values.address = 'serial.local';
+      values.port = 1;
+      values.description = values.description.trim();
+    }
     if (values.identityMode === 'existing' && !hasIdentities) {
       values.identityMode = 'new';
       values.identityId = '';
@@ -38,10 +47,6 @@ export function Step1(): JSX.Element {
 
   return (
     <form className="space-y-5" onSubmit={handleSubmit(onSubmit)}>
-      <div className="rounded-2xl border border-white/70 bg-white/60 p-4 text-xs leading-6 text-slate-600">
-        快速添加只需：主机地址 + 端口 + 登录用户名 + 认证信息。主机名称与身份名称可留空，系统会自动生成。
-      </div>
-
       <div className="space-y-2">
         <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
           主机名称 (可选)
@@ -53,21 +58,99 @@ export function Step1(): JSX.Element {
 
       <div className="space-y-2">
         <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
-          主机地址
-          <Tooltip content="支持域名、IPv4 或 [IPv6]。该地址是客户端发起 SSH 连接的目标地址，请确保 DNS 或网络路由可达。" />
+          主机分组 (可选)
+          <Tooltip content="用于按业务或环境归档资产，例如：生产、测试、香港节点。可留空，后续可在编辑中修改。" />
         </label>
-        <input className={inputClassName} placeholder="例如：10.10.10.8 或 host.example.com" {...register('address')} />
-        {errors.address && <p className="text-xs text-rose-500">{errors.address.message}</p>}
+        <input className={inputClassName} placeholder="例如：生产 / 测试 / 香港节点" {...register('group')} />
+        {errors.group && <p className="text-xs text-rose-500">{errors.group.message}</p>}
+      </div>
+
+      <div className="space-y-2">
+        <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+          连接协议
+          <Tooltip content="SSH 适用于服务器运维；Telnet 适用于旧设备；Serial 适用于本地串口设备（移动端仅展示，不可用）。" />
+        </label>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/70 bg-white/70 p-3 text-sm text-slate-700">
+            <input type="radio" value="ssh" {...register('protocol')} />
+            SSH
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/70 bg-white/70 p-3 text-sm text-slate-700">
+            <input type="radio" value="telnet" {...register('protocol')} />
+            Telnet
+          </label>
+          <label
+            className={`flex items-center gap-2 rounded-xl border border-white/70 bg-white/70 p-3 text-sm ${
+              isMobileRuntime ? 'cursor-not-allowed text-slate-400' : 'cursor-pointer text-slate-700'
+            }`}
+          >
+            <input
+              disabled={isMobileRuntime}
+              type="radio"
+              value="serial"
+              {...register('protocol')}
+            />
+            Serial
+          </label>
+        </div>
+        {isMobileRuntime && (
+          <p className="text-xs text-amber-600">
+            移动端暂不支持本地串口连接，桌面端可使用 Serial（如 COM3 / /dev/ttyUSB0）。
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+          {protocol === 'serial' ? '串口设备路径' : '主机地址'}
+          <Tooltip
+            content={
+              protocol === 'serial'
+                ? '例如 Windows: COM3；Linux/macOS: /dev/ttyUSB0、/dev/tty.SLAB_USBtoUART'
+                : protocol === 'telnet'
+                  ? 'Telnet 目标地址，支持域名、IPv4 或 [IPv6]。'
+                  : '支持域名、IPv4 或 [IPv6]。该地址是客户端发起 SSH 连接的目标地址，请确保 DNS 或网络路由可达。'
+            }
+          />
+        </label>
+        {protocol === 'serial' ? (
+          <>
+            <input className={inputClassName} placeholder="例如：COM3 或 /dev/ttyUSB0" {...register('serialPath')} />
+            {errors.serialPath && <p className="text-xs text-rose-500">{errors.serialPath.message}</p>}
+          </>
+        ) : (
+          <>
+            <input className={inputClassName} placeholder="例如：10.10.10.8 或 host.example.com" {...register('address')} />
+            {errors.address && <p className="text-xs text-rose-500">{errors.address.message}</p>}
+          </>
+        )}
       </div>
 
       <div className="grid gap-5 sm:grid-cols-2">
         <div className="space-y-2">
           <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
-            端口
-            <Tooltip content="SSH 默认端口为 22。若服务端已做安全加固修改，请填写实际监听端口。可用范围为 1-65535。" />
+            {protocol === 'serial' ? '波特率' : '端口'}
+            <Tooltip
+              content={
+                protocol === 'serial'
+                  ? '常见值：9600、19200、38400、57600、115200。'
+                  : protocol === 'telnet'
+                    ? 'Telnet 默认端口为 23。'
+                    : 'SSH 默认端口为 22。若服务端已做安全加固修改，请填写实际监听端口。可用范围为 1-65535。'
+              }
+            />
           </label>
-          <input className={inputClassName} type="number" {...register('port')} />
-          {errors.port && <p className="text-xs text-rose-500">{errors.port.message}</p>}
+          {protocol === 'serial' ? (
+            <>
+              <input className={inputClassName} type="number" {...register('serialBaudRate')} />
+              {errors.serialBaudRate && <p className="text-xs text-rose-500">{errors.serialBaudRate.message}</p>}
+            </>
+          ) : (
+            <>
+              <input className={inputClassName} type="number" {...register('port')} />
+              {errors.port && <p className="text-xs text-rose-500">{errors.port.message}</p>}
+            </>
+          )}
         </div>
       </div>
 

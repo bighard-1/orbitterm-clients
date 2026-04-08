@@ -4,20 +4,50 @@ export const hostPattern = /^(?!-)([a-zA-Z0-9-]{1,63}\.)*[a-zA-Z0-9-]{1,63}$|^((
 
 export const step1Schema = z
   .object({
+    protocol: z.enum(['ssh', 'telnet', 'serial']).default('ssh'),
     name: z.string().max(50, '主机名称不能超过 50 个字符').default(''),
-    address: z
-      .string()
-      .min(2, '请输入有效的主机地址')
-      .max(255, '主机地址过长')
-      .refine((value) => hostPattern.test(value), '请输入合法的域名、IPv4 或 [IPv6] 地址'),
+    group: z.string().max(40, '分组名称不能超过 40 个字符').default(''),
+    address: z.string().max(255, '主机地址过长').default(''),
     port: z.coerce.number().int('端口必须为整数').min(1, '端口最小为 1').max(65535, '端口最大为 65535'),
     description: z.string().max(160, '备注不能超过 160 个字符').default(''),
+    serialPath: z.string().max(255, '串口设备路径过长').default(''),
+    serialBaudRate: z.coerce
+      .number()
+      .int('波特率必须是整数')
+      .min(300, '波特率最小为 300')
+      .max(4000000, '波特率过大，请检查')
+      .default(115200),
     identityMode: z.enum(['existing', 'new']).default('new'),
     identityId: z.string().default(''),
     identityName: z.string().max(50, '身份名称不能超过 50 个字符').default(''),
     identityUsername: z.string().max(64, '身份用户名不能超过 64 个字符').default('')
   })
   .superRefine((data, ctx) => {
+    if (data.protocol === 'serial') {
+      if (data.serialPath.trim().length < 1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['serialPath'],
+          message: '请输入串口设备路径，例如 COM3 或 /dev/ttyUSB0'
+        });
+      }
+    } else {
+      const normalizedAddress = data.address.trim();
+      if (normalizedAddress.length < 2) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['address'],
+          message: '请输入有效的主机地址'
+        });
+      } else if (!hostPattern.test(normalizedAddress)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['address'],
+          message: '请输入合法的域名、IPv4 或 [IPv6] 地址'
+        });
+      }
+    }
+
     if (data.identityMode === 'existing' && !data.identityId.trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -39,7 +69,7 @@ export const step1Schema = z
 
 export const step2Schema = z
   .object({
-    method: z.enum(['password', 'privateKey'], {
+    method: z.enum(['none', 'password', 'privateKey'], {
       required_error: '请选择认证方式'
     }),
     password: z.string().optional(),
@@ -49,11 +79,11 @@ export const step2Schema = z
   .superRefine((data, ctx) => {
     if (data.method === 'password') {
       const pwd = data.password?.trim() ?? '';
-      if (pwd.length < 6) {
+      if (pwd.length < 1) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['password'],
-          message: '密码至少需要 6 位'
+          message: '请输入登录密码'
         });
       }
     }
@@ -91,9 +121,13 @@ export const identitySchema = z.object({
 export const finalHostSchema = z.object({
   basicInfo: z.object({
     name: z.string().min(2).max(50),
-    address: z.string().min(2).max(255),
+    group: z.string().max(40).default(''),
+    address: z.string().min(1).max(255),
     port: z.number().int().min(1).max(65535),
-    description: z.string().max(160)
+    description: z.string().max(160),
+    protocol: z.enum(['ssh', 'telnet', 'serial']).default('ssh'),
+    serialPath: z.string().max(255).default(''),
+    serialBaudRate: z.number().int().min(300).max(4000000).default(115200)
   }),
   identityId: z.string().min(1, '请绑定一个身份'),
   advancedOptions: z.object({

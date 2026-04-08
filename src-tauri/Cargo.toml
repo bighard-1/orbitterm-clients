@@ -1,6 +1,6 @@
 [package]
 name = "orbitterm-backend"
-version = "0.1.87"
+version = "0.1.88"
 description = "OrbitTerm Tauri backend with async SSH"
 authors = ["OrbitTerm Team"]
 license = "MIT"
@@ -49,6 +49,7 @@ panic = "abort"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
+tokio-serial = "5.4"
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-biometric = "2.3.2"

@@ -3,16 +3,19 @@
 @tailwind utilities;
 
 :root {
-  font-family: 'IBM Plex Sans', 'PingFang SC', 'Noto Sans TC', 'Noto Sans JP', 'Segoe UI', sans-serif;
-  color: #0f172a;
+  font-family: 'PingFang SC', 'Noto Sans TC', 'Noto Sans JP', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 15px;
+  color: #dbe2ee;
   text-rendering: optimizeLegibility;
-  color-scheme: light;
-  --app-bg-layer-1: rgba(173, 205, 255, 0.46);
-  --app-bg-layer-2: rgba(180, 236, 216, 0.35);
-  --app-bg-layer-3: rgba(250, 232, 193, 0.28);
-  --app-bg-base-a: #edf4ff;
-  --app-bg-base-b: #dae8ff;
-  --app-bg-base-c: #f8fbff;
+  color-scheme: dark;
+  --radius: 6px;
+  --app-accent: #3b82f6;
+  --app-bg-layer-1: rgba(59, 130, 246, 0.14);
+  --app-bg-layer-2: rgba(56, 189, 248, 0.08);
+  --app-bg-layer-3: rgba(148, 163, 184, 0.06);
+  --app-bg-base-a: #0f1115;
+  --app-bg-base-b: #12151b;
+  --app-bg-base-c: #0b0d12;
   --acrylic-blur: 14px;
   --acrylic-saturation: 120%;
   --acrylic-brightness: 102%;
@@ -36,7 +39,7 @@ body {
     radial-gradient(circle at 85% 12%, var(--app-bg-layer-2), transparent 30%),
     radial-gradient(circle at 50% 85%, var(--app-bg-layer-3), transparent 42%),
     linear-gradient(132deg, var(--app-bg-base-a) 0%, var(--app-bg-base-b) 48%, var(--app-bg-base-c) 100%);
-  transition: background 280ms ease, color 220ms ease;
+  transition: background 150ms ease-in-out, color 150ms ease-in-out;
 }
 
 #root {
@@ -49,6 +52,31 @@ select,
 textarea,
 [role='button'] {
   touch-action: manipulation;
+  border-radius: var(--radius) !important;
+  transition:
+    background-color 150ms ease-in-out,
+    color 150ms ease-in-out,
+    border-color 150ms ease-in-out,
+    opacity 150ms ease-in-out,
+    box-shadow 150ms ease-in-out,
+    transform 150ms ease-in-out;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role='button']:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.75);
+  outline-offset: 1px;
+}
+
+[class*='rounded-'] {
+  border-radius: var(--radius) !important;
+}
+
+.rounded-full {
+  border-radius: 9999px !important;
 }
 
 @media (pointer: coarse) {
@@ -86,12 +114,41 @@ textarea,
 
 .orbitterm-xterm-host .xterm .xterm-viewport {
   scrollbar-gutter: stable both-edges;
-  padding-right: 8px;
+  padding-right: 4px;
   overflow-wrap: anywhere;
+  font-family:
+    'JetBrains Mono',
+    'JetBrainsMono Nerd Font',
+    'SFMono-Regular',
+    Menlo,
+    Monaco,
+    Consolas,
+    'Liberation Mono',
+    'Courier New',
+    monospace;
 }
 
 .orbitterm-xterm-host .xterm .xterm-screen {
-  padding-right: 8px;
+  padding: 16px 14px 14px 16px;
+}
+
+.orbitterm-xterm-host .xterm .xterm-cursor {
+  transition: opacity 180ms ease-in-out;
+}
+
+.orbitterm-xterm-host .xterm.xterm-cursor-blink .xterm-cursor {
+  animation: ot-cursor-breathe 1.05s ease-in-out infinite;
+}
+
+@keyframes ot-cursor-breathe {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  60%,
+  100% {
+    opacity: 0.25;
+  }
 }
 
 .orbitterm-xterm-host .xterm .xterm-viewport::-webkit-scrollbar {
@@ -99,13 +156,13 @@ textarea,
 }
 
 .orbitterm-xterm-host {
-  border-radius: 14px;
+  border-radius: var(--radius);
   overflow: hidden;
 }
 
 @media (pointer: coarse) {
   .orbitterm-xterm-host {
-    border-radius: 12px;
+    border-radius: var(--radius);
   }
 
   .orbitterm-xterm-host .xterm .xterm-viewport {
@@ -114,7 +171,7 @@ textarea,
   }
 
   .orbitterm-xterm-host .xterm .xterm-screen {
-    padding-right: 2px;
+    padding: 12px 10px 10px 12px;
   }
 
   .orbitterm-xterm-host .xterm .xterm-viewport::-webkit-scrollbar {
@@ -122,9 +179,161 @@ textarea,
   }
 }
 
+.ot-panel {
+  border-radius: var(--radius) !important;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+
+.ot-host-row {
+  min-height: 46px;
+  border-radius: var(--radius);
+  box-shadow: none !important;
+}
+
+.ot-host-row-actions {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ot-host-row:hover .ot-host-row-actions,
+.ot-host-row:focus-within .ot-host-row-actions,
+.ot-host-row[data-selected='true'] .ot-host-row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ot-thin-slider {
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(71, 85, 105, 0.45);
+}
+
+.ot-thin-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 165, 250, 0.9);
+  background: rgba(239, 246, 255, 0.95);
+}
+
+.ot-thin-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 165, 250, 0.9);
+  background: rgba(239, 246, 255, 0.95);
+}
+
+.ot-thin-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(71, 85, 105, 0.45);
+}
+
+.ot-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.ot-skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.22) 50%, transparent 100%);
+  animation: ot-skeleton-shimmer 1.15s ease-in-out infinite;
+}
+
+@keyframes ot-skeleton-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.ot-settings-drawer input[type='checkbox'] {
+  appearance: none;
+  width: 34px;
+  height: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 999px !important;
+  background: rgba(30, 41, 59, 0.7);
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ot-settings-drawer input[type='checkbox']::after {
+  content: '';
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: rgba(241, 245, 249, 0.94);
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 150ms ease-in-out;
+}
+
+.ot-settings-drawer input[type='checkbox']:checked {
+  background: var(--app-accent);
+  border-color: rgba(59, 130, 246, 0.9);
+}
+
+.ot-settings-drawer input[type='checkbox']:checked::after {
+  transform: translateX(14px);
+}
+
+.ot-settings-drawer .bg-white {
+  background-color: rgba(15, 23, 42, 0.72) !important;
+}
+
+.ot-settings-drawer .hover\:bg-white:hover,
+.ot-settings-drawer .hover\:bg-slate-50:hover,
+.ot-settings-drawer .hover\:bg-slate-100:hover {
+  background-color: rgba(30, 41, 59, 0.82) !important;
+}
+
+.ot-settings-drawer select,
+.ot-settings-drawer input[type='text'],
+.ot-settings-drawer input[type='number'],
+.ot-settings-drawer textarea {
+  background: rgba(15, 23, 42, 0.72) !important;
+  color: #e2e8f0 !important;
+  border-color: rgba(100, 116, 139, 0.55) !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+@media (max-width: 360px) {
+  :root {
+    font-size: 14px;
+  }
+
+  .ot-mobile-nav {
+    left: 0.35rem;
+    right: 0.35rem;
+    bottom: 0.25rem;
+    gap: 0.2rem;
+    padding: 0.35rem;
+  }
+
+  .ot-mobile-nav-btn {
+    min-height: 42px;
+    padding: 0.35rem 0.3rem;
+    font-size: 10px;
+  }
+
+  .ot-host-row {
+    padding-left: 0.3rem !important;
+    padding-right: 0.3rem !important;
   }
 }
