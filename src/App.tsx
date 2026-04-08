@@ -1078,6 +1078,7 @@ function App(): JSX.Element {
   const syncPullFromCloud = useHostStore((state) => state.syncPullFromCloud);
   const syncPushToCloud = useHostStore((state) => state.syncPushToCloud);
   const refreshCloudSyncPolicy = useHostStore((state) => state.refreshCloudSyncPolicy);
+  const refreshCloudLicenseStatus = useHostStore((state) => state.refreshCloudLicenseStatus);
   const reset = useHostStore((state) => state.reset);
   const lockVault = useHostStore((state) => state.lockVault);
   const updateHostAndIdentity = useHostStore((state) => state.updateHostAndIdentity);
@@ -2726,6 +2727,36 @@ function App(): JSX.Element {
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [appView, cloudSyncSession, refreshCloudSyncPolicy, syncPullFromCloud]);
+
+  useEffect(() => {
+    if (appView !== 'dashboard' || !cloudSyncSession) {
+      return;
+    }
+
+    const runRefresh = (): void => {
+      void refreshCloudLicenseStatus({ silent: true });
+    };
+
+    runRefresh();
+    const intervalId = window.setInterval(runRefresh, 30 * 1000);
+    const onFocus = (): void => {
+      runRefresh();
+    };
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') {
+        runRefresh();
+      }
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [appView, cloudSyncSession, refreshCloudLicenseStatus]);
 
   useEffect(() => {
     if (appView !== 'dashboard' || cloudSyncSession) {
@@ -6082,7 +6113,7 @@ function App(): JSX.Element {
         </div>
       </section>
 
-      {isMobileRuntime && appView === 'dashboard' && !isMobileTerminalFocusMode && (
+      {isMobileRuntime && appView === 'dashboard' && !isMobileTerminalFocusMode && !isCloudAuthModalOpen && (
         <MobileLayout
           activeTab={mobileNavTab}
           locale={locale}

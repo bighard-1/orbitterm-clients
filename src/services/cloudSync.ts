@@ -1140,7 +1140,8 @@ export const registerCloudSync = async (
   apiBaseUrl: string,
   email: string,
   password: string,
-  verifyCode: string
+  verifyCode: string,
+  confirmPassword?: string
 ): Promise<CloudSyncSession> => {
   const endpoint = ensureHttpsEndpoint(apiBaseUrl);
   try {
@@ -1152,6 +1153,7 @@ export const registerCloudSync = async (
       body: JSON.stringify({
         email,
         password,
+        confirmPassword: confirmPassword?.trim() || undefined,
         verifyCode,
         deviceName: detectDeviceName(),
         deviceLocation: detectDeviceLocation()

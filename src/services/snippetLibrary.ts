@@ -20,10 +20,20 @@ export const builtinSnippetTemplates: BuiltinSnippetTemplate[] = [
   {
     id: 'builtin-ubuntu-apt-upgrade',
     category: 'ubuntu',
-    title: '系统更新（APT）',
-    command: 'sudo apt update && sudo apt upgrade -y',
-    tags: ['系统维护', '更新'],
-    description: '刷新软件源并升级已安装包，适合日常巡检前执行。'
+    title: '系统更新（APT，含锁等待）',
+    command:
+      'sudo apt -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update && sudo DEBIAN_FRONTEND=noninteractive apt -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 upgrade -y',
+    tags: ['系统维护', '更新', '锁等待'],
+    description: '刷新软件源并升级已安装包。自动等待 dpkg 锁（最长 300 秒），减少锁冲突导致的失败。'
+  },
+  {
+    id: 'builtin-ubuntu-apt-lock-diagnose',
+    category: 'ubuntu',
+    title: '排查 APT 锁占用',
+    command:
+      "sudo sh -c 'echo \"[holders]\"; lsof /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock 2>/dev/null || true; echo \"[apt-process]\"; pgrep -a apt || true; echo \"[timers]\"; systemctl list-timers --all 2>/dev/null | grep -E \"apt|unattended\" || true'",
+    tags: ['排障', 'APT', '锁'],
+    description: '定位是哪个进程占用 dpkg/apt 锁，便于判断是自动更新还是人工会话导致。'
   },
   {
     id: 'builtin-ubuntu-service-status',
@@ -109,9 +119,10 @@ export const builtinSnippetTemplates: BuiltinSnippetTemplate[] = [
     id: 'builtin-debian-install-tools',
     category: 'debian',
     title: '安装常用工具',
-    command: 'sudo apt update && sudo apt install -y curl wget vim git net-tools',
-    tags: ['初始化', '工具'],
-    description: '新机初始化常用运维工具，便于后续排障与维护。'
+    command:
+      'sudo apt -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update && sudo DEBIAN_FRONTEND=noninteractive apt -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 install -y curl wget vim git net-tools',
+    tags: ['初始化', '工具', '锁等待'],
+    description: '新机初始化常用运维工具。包含 APT 锁等待参数，避免并发更新冲突。'
   },
   {
     id: 'builtin-debian-package-check',

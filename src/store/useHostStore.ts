@@ -132,7 +132,8 @@ interface HostState {
     apiBaseUrl: string,
     email: string,
     password: string,
-    verifyCode: string
+    verifyCode: string,
+    confirmPassword?: string
   ) => Promise<void>;
   loginCloudAccount: (
     apiBaseUrl: string,
@@ -145,7 +146,7 @@ interface HostState {
   ) => Promise<void>;
   logoutCloudAccount: () => void;
   refreshCloudSyncPolicy: (options?: { silent?: boolean }) => Promise<void>;
-  refreshCloudLicenseStatus: () => Promise<void>;
+  refreshCloudLicenseStatus: (options?: { silent?: boolean }) => Promise<void>;
   refreshCloudUser2FAStatus: () => Promise<void>;
   beginCloudUser2FASetup: () => Promise<void>;
   confirmEnableCloudUser2FA: (otpCode: string) => Promise<void>;
@@ -1144,10 +1145,10 @@ export const useHostStore = create<HostState>((set, get) => ({
       saveError: null
     });
   },
-  registerCloudAccount: async (apiBaseUrl, email, password, verifyCode) => {
+  registerCloudAccount: async (apiBaseUrl, email, password, verifyCode, confirmPassword) => {
     set({ isSyncingCloud: true, cloudSyncError: null });
     try {
-      const session = await registerCloudSync(apiBaseUrl, email, password, verifyCode);
+      const session = await registerCloudSync(apiBaseUrl, email, password, verifyCode, confirmPassword);
       try {
         await bindCloudUnlockCredentials(session.email, password);
       } catch (bindError) {
@@ -1421,7 +1422,7 @@ export const useHostStore = create<HostState>((set, get) => ({
       });
     }
   },
-  refreshCloudLicenseStatus: async () => {
+  refreshCloudLicenseStatus: async (options) => {
     const state = get();
     const session = state.cloudSyncSession ?? readCloudSyncSession();
     if (!session || state.appView !== 'dashboard') {
@@ -1442,10 +1443,16 @@ export const useHostStore = create<HostState>((set, get) => ({
     } catch (error) {
       const fallback = '读取授权状态失败，请稍后重试。';
       const message = extractErrorMessage(error, fallback);
-      set({
-        cloudLicenseStatus: null,
-        cloudSyncError: message || fallback
-      });
+      if (options?.silent) {
+        set({
+          cloudLicenseStatus: null
+        });
+      } else {
+        set({
+          cloudLicenseStatus: null,
+          cloudSyncError: message || fallback
+        });
+      }
     }
   },
   refreshCloudUser2FAStatus: async () => {

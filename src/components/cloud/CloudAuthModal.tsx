@@ -96,6 +96,7 @@ export function CloudAuthModal({ open, onSkip, onSuccess }: CloudAuthModalProps)
   const [apiBaseUrl, setApiBaseUrl] = useState<string>('');
   const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
+  const [registerPasswordConfirm, setRegisterPasswordConfirm] = useState<string>('');
   const [registerVerifyCode, setRegisterVerifyCode] = useState<string>('');
   const [isSendingRegisterVerifyCode, setIsSendingRegisterVerifyCode] = useState<boolean>(false);
   const [otpCode, setOtpCode] = useState<string>('');
@@ -126,6 +127,7 @@ export function CloudAuthModal({ open, onSkip, onSuccess }: CloudAuthModalProps)
     setApiBaseUrl(cachedDomain || hintedDomain);
     setEmail(hints.email);
     setPassword('');
+    setRegisterPasswordConfirm('');
     setRegisterVerifyCode('');
     setIsSendingRegisterVerifyCode(false);
     setOtpCode('');
@@ -251,6 +253,10 @@ export function CloudAuthModal({ open, onSkip, onSuccess }: CloudAuthModalProps)
       toast.error(baseUrlCandidate ? t('cloud.errorFillRequired') : t('cloud.errorNoAutoSyncUrl'));
       return;
     }
+    if (!registerPasswordConfirm.trim() || registerPasswordConfirm !== password) {
+      toast.error(t('cloud.errorRegisterPasswordMismatch'));
+      return;
+    }
     if (!registerVerifyCode.trim()) {
       logAppWarn('cloud-sync-auth', '注册请求缺少验证码', {
         stage: 'register',
@@ -270,13 +276,15 @@ export function CloudAuthModal({ open, onSkip, onSuccess }: CloudAuthModalProps)
         effectiveApi,
         normalizedHints.email,
         password,
-        registerVerifyCode.trim()
+        registerVerifyCode.trim(),
+        registerPasswordConfirm.trim()
       );
       writeAuthHints({
         ...normalizedHints,
         apiBaseUrl: effectiveApi
       });
       setPassword('');
+      setRegisterPasswordConfirm('');
       onSuccess();
     } catch (error) {
       if (isLikelyNetworkFailure(error) && bootstrapConfigured) {
@@ -288,13 +296,15 @@ export function CloudAuthModal({ open, onSkip, onSuccess }: CloudAuthModalProps)
               fallbackApi,
               normalizedHints.email,
               password,
-              registerVerifyCode.trim()
+              registerVerifyCode.trim(),
+              registerPasswordConfirm.trim()
             );
             writeAuthHints({
               ...normalizedHints,
               apiBaseUrl: fallbackApi
             });
       setPassword('');
+      setRegisterPasswordConfirm('');
       setRegisterVerifyCode('');
       onSuccess();
             return;
@@ -518,8 +528,8 @@ export function CloudAuthModal({ open, onSkip, onSuccess }: CloudAuthModalProps)
   }
 
   return (
-    <div className="fixed inset-0 z-[136] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-3xl border border-white/45 bg-[#f1f7ff]/95 p-6 shadow-2xl backdrop-blur-2xl">
+    <div className="fixed inset-0 z-[260] flex items-end justify-center bg-black/45 p-3 pb-[calc(5.4rem+env(safe-area-inset-bottom))] pt-4 backdrop-blur-sm sm:items-center sm:p-4">
+      <div className="max-h-[calc(100vh-7.5rem-env(safe-area-inset-bottom))] w-full max-w-lg overflow-y-auto rounded-3xl border border-white/45 bg-[#f1f7ff]/95 p-6 shadow-2xl backdrop-blur-2xl sm:max-h-[88vh]">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{t('cloud.tag')}</p>
         <h2 className="mt-2 text-xl font-semibold text-slate-900">{t('cloud.title')}</h2>
         <p className="mt-1 text-sm text-slate-600">
@@ -602,6 +612,19 @@ export function CloudAuthModal({ open, onSkip, onSuccess }: CloudAuthModalProps)
               placeholder={t('cloud.passwordPlaceholder')}
               type="password"
               value={password}
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-600" htmlFor="cloud-auth-password-confirm">
+              {t('cloud.passwordConfirmLabel')}
+            </label>
+            <input
+              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-blue-300"
+              id="cloud-auth-password-confirm"
+              onChange={(event) => setRegisterPasswordConfirm(event.target.value)}
+              placeholder={t('cloud.passwordPlaceholder')}
+              type="password"
+              value={registerPasswordConfirm}
             />
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">

@@ -15,6 +15,7 @@
     "build:linux:docker:arm64:all": "bash scripts/local-build/build-linux-docker.sh --arch arm64 --linux-targets deb,rpm,appimage",
     "build:macos:arm64": "bash scripts/local-build/build-macos-host.sh --arch arm64",
     "build:macos:x64": "bash scripts/local-build/build-macos-host.sh --arch x64",
+    "build:windows:native": "powershell -ExecutionPolicy Bypass -File scripts/local-build/build-windows-native.ps1",
     "setup:mobile:local": "bash scripts/local-build/setup-mobile.sh",
     "build:android:apk:debug": "bash scripts/local-build/build-android.sh",
     "build:android:apk:release": "bash scripts/local-build/build-android-release.sh",
