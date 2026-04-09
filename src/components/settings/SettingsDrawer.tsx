@@ -176,6 +176,10 @@ export function SettingsDrawer({
   const isActivatingCloudLicense = useHostStore((state) => state.isActivatingCloudLicense);
   const isSyncingCloud = useHostStore((state) => state.isSyncingCloud);
   const cloudSyncError = useHostStore((state) => state.cloudSyncError);
+  const cloudTeams = useHostStore((state) => state.cloudTeams);
+  const currentCloudTeamRole = useHostStore((state) => state.currentCloudTeamRole);
+  const isLoadingCloudTeams = useHostStore((state) => state.isLoadingCloudTeams);
+  const switchCloudTeam = useHostStore((state) => state.switchCloudTeam);
   const identities = useHostStore((state) => state.identities);
   const hosts = useHostStore((state) => state.hosts);
   const isSavingVault = useHostStore((state) => state.isSavingVault);
@@ -366,6 +370,19 @@ export function SettingsDrawer({
     }
     return source.slice(0, 2).toUpperCase();
   }, [cloudSyncSession]);
+
+  const currentCloudTeamId = useMemo(() => {
+    const teamId = cloudSyncSession?.currentTeamId?.trim();
+    return teamId || '';
+  }, [cloudSyncSession?.currentTeamId]);
+
+  const currentCloudTeamName = useMemo(() => {
+    if (!currentCloudTeamId) {
+      return '个人空间';
+    }
+    const found = cloudTeams.find((item) => item.id === currentCloudTeamId);
+    return found?.name?.trim() || currentCloudTeamId;
+  }, [cloudTeams, currentCloudTeamId]);
 
   const showProfileCategory = activeCategory === 'profile';
   const showSettingsCategory = activeCategory === 'settings';
@@ -759,7 +776,7 @@ export function SettingsDrawer({
     <div
       className={`ot-settings-drawer fixed flex justify-end bg-black/54 backdrop-blur-[20px] ${
         isMobileView
-          ? 'inset-x-0 top-0 bottom-[calc(5.1rem+env(safe-area-inset-bottom))] z-[205]'
+          ? 'inset-x-0 top-0 bottom-[calc(6.6rem+env(safe-area-inset-bottom))] z-[240]'
           : 'inset-0 z-[320]'
       }`}
     >
@@ -771,7 +788,7 @@ export function SettingsDrawer({
       />
       <aside
         className={`relative h-full w-full max-w-[620px] overflow-y-auto border-l border-slate-700/70 bg-[linear-gradient(180deg,rgba(16,22,31,0.92),rgba(12,16,24,0.96))] p-5 text-slate-100 shadow-[0_24px_80px_rgba(0,0,0,0.5)] backdrop-blur-xl ${
-          isMobileView ? 'pb-[calc(8.2rem+env(safe-area-inset-bottom))]' : ''
+          isMobileView ? 'pb-[calc(11.6rem+env(safe-area-inset-bottom))]' : ''
         }`}
       >
         <div className="sticky top-0 z-10 -mx-5 -mt-5 mb-5 flex items-center justify-between border-b border-slate-700/70 bg-slate-950/78 px-5 py-4 backdrop-blur-2xl">
@@ -1663,7 +1680,7 @@ export function SettingsDrawer({
             ) : null}
             {cloudSyncSession && cloudSyncPolicy?.requireActivation !== false && (
               <div
-                className="rounded-[var(--radius)] border border-[#cad9f8] bg-[#f4f8ff] px-3 py-3"
+                className="rounded-[var(--radius)] border border-indigo-400/35 bg-indigo-500/10 px-3 py-3"
                 id="settings-sync-license"
               >
                 <button
@@ -1717,7 +1734,7 @@ export function SettingsDrawer({
             )}
 
             {cloudSyncSession ? (
-              <div className="rounded-[var(--radius)] border border-violet-200 bg-violet-50 px-3 py-3">
+              <div className="rounded-[var(--radius)] border border-violet-400/35 bg-violet-500/10 px-3 py-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-xs font-semibold text-slate-100">账号 2FA（TOTP）</p>
                   <button
@@ -1852,6 +1869,37 @@ export function SettingsDrawer({
                     </p>
                   </div>
                 ) : null}
+              </div>
+            ) : null}
+
+            {cloudSyncSession ? (
+              <div className="rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/62 px-3 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-slate-100">团队空间</p>
+                  {isLoadingCloudTeams ? <span className="text-[11px] text-slate-400">加载中...</span> : null}
+                </div>
+                <p className="mt-1 text-[11px] text-slate-300">
+                  当前空间：{currentCloudTeamName} · 角色：{currentCloudTeamRole || 'Owner'}
+                </p>
+                <select
+                  className="mt-2 w-full rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/72 px-2 py-2 text-xs text-slate-100 outline-none focus:border-[#90b6ec]"
+                  disabled={isLoadingCloudTeams}
+                  onChange={(event) => {
+                    const nextTeamId = event.target.value.trim();
+                    void switchCloudTeam(nextTeamId || null).catch((error) => {
+                      const fallback = '切换团队失败，请稍后重试。';
+                      toast.error(error instanceof Error ? error.message : fallback);
+                    });
+                  }}
+                  value={currentCloudTeamId}
+                >
+                  <option value="">个人空间</option>
+                  {cloudTeams.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
               </div>
             ) : null}
             </section>

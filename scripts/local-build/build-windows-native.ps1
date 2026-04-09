@@ -22,7 +22,7 @@ function Require-Command {
 
 function Invoke-Build {
   param([string[]]$Args)
-  & npx tauri build @Args
+  & npx tauri build --config "src-tauri\tauri.conf.json" @Args
   return $LASTEXITCODE
 }
 
@@ -83,6 +83,9 @@ $srcTauriConfigPath = Join-Path $root "src-tauri\tauri.conf.json"
 $tmpTauriConfigPath = Join-Path $env:TEMP "orbitterm-tauri.conf.windows.no-updater.json"
 $backupTauriConfigPath = Join-Path $env:TEMP "orbitterm-tauri.conf.windows.backup.json"
 $configSwapped = $false
+$workspaceCargoPath = Join-Path $root "Cargo.toml"
+$workspaceCargoBackupPath = Join-Path $env:TEMP "orbitterm.Cargo.toml.windows.build.bak"
+$workspaceCargoSwapped = $false
 
 function Restore-TauriConfig {
   if (-not $configSwapped) { return }
@@ -96,7 +99,16 @@ function Restore-TauriConfig {
   $script:configSwapped = $false
 }
 
+function Restore-WorkspaceCargo {
+  if (-not $workspaceCargoSwapped) { return }
+  if (Test-Path $workspaceCargoBackupPath) {
+    Move-Item -Path $workspaceCargoBackupPath -Destination $workspaceCargoPath -Force
+  }
+  $script:workspaceCargoSwapped = $false
+}
+
 trap {
+  Restore-WorkspaceCargo
   Restore-TauriConfig
   throw $_
 }
@@ -115,6 +127,18 @@ if (Test-Path $disableUpdaterScript) {
 }
 
 if (-not $SkipBuild) {
+  if (Test-Path $workspaceCargoPath) {
+    $workspaceCargoRaw = Get-Content $workspaceCargoPath -Raw
+    $hasWorkspace = [regex]::IsMatch($workspaceCargoRaw, "(?m)^\s*\[workspace\]\s*$")
+    $hasPackage = [regex]::IsMatch($workspaceCargoRaw, "(?m)^\s*\[package\]\s*$")
+    if ($hasWorkspace -and -not $hasPackage) {
+      Write-Step "Temporarily disabling workspace Cargo.toml for Windows tauri build compatibility"
+      Copy-Item -Path $workspaceCargoPath -Destination $workspaceCargoBackupPath -Force
+      Remove-Item -Path $workspaceCargoPath -Force
+      $workspaceCargoSwapped = $true
+    }
+  }
+
   Write-Step "Install node dependencies"
   npm ci
   if ($LASTEXITCODE -ne 0) { throw "npm ci failed." }
@@ -287,4 +311,5 @@ if ($Push) {
 }
 
 Restore-TauriConfig
+Restore-WorkspaceCargo
 Write-Step "Done"

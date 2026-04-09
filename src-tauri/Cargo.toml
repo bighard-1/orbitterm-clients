@@ -11,6 +11,10 @@ rust-version = "1.75"
 name = "orbitterm_backend"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "OrbitTerm"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -34,7 +38,7 @@ uuid = { version = "1.10", features = ["v4", "serde"] }
 zeroize = "1.8"
 tauri-plugin-shell = "2"
 tauri-plugin-process = "2"
-tauri-plugin-dialog = "2"
+tauri-plugin-dialog = "2.7.0"
 
 [features]
 default = ["custom-protocol"]

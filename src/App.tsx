@@ -5762,7 +5762,7 @@ function App(): JSX.Element {
                     </span>
                     <input
                       aria-label={uiText.hostSearchPlaceholder}
-                      className="w-full rounded-[var(--radius)] border py-1.5 pl-7 pr-24 text-xs outline-none transition"
+                      className="w-full rounded-[var(--radius)] border py-1.5 pl-7 pr-24 text-xs outline-none transition placeholder:text-slate-400 placeholder:opacity-90"
                       onChange={(event) => {
                         setHostSearchQuery(event.target.value);
                         setHighlightedSearchIndex(0);
