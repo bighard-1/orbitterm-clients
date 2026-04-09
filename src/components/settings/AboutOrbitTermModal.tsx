@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getAppVersion } from '../../services/appInfo';
 import { openExternalLink } from '../../services/externalLink';
-import { openReleasePage, type ReleaseNoticeState } from '../../services/updater';
+import { type ReleaseNoticeState } from '../../services/updater';
 import { BrandLogo } from '../BrandLogo';
 
 interface AboutOrbitTermModalProps {
@@ -10,8 +10,9 @@ interface AboutOrbitTermModalProps {
   releaseNotice: ReleaseNoticeState;
 }
 
-const GITHUB_URL = 'https://github.com/biglinfei-wq/orbitterm-management';
-const WEBSITE_URL = 'https://orbitterm.app';
+const GITHUB_URL = 'https://www.github.com';
+const WEBSITE_URL = 'https://www.orbitterm.com';
+const DOWNLOAD_PAGE_URL = 'https://www.orbitterm.com/download.html';
 
 const formatCheckTime = (value: string | null): string => {
   if (!value) {
@@ -119,7 +120,7 @@ export function AboutOrbitTermModal({ open, onClose, releaseNotice }: AboutOrbit
               <button
                 className="rounded-lg border border-emerald-400/70 bg-emerald-400/10 px-3 py-1.5 text-xs font-medium text-emerald-100 hover:bg-emerald-400/20"
                 onClick={() => {
-                  void openReleasePage(releaseNotice.releaseUrl ?? undefined);
+                  void openExternalLink(DOWNLOAD_PAGE_URL);
                 }}
                 type="button"
               >

@@ -28,6 +28,7 @@ import {
   discoverCloudSyncPolicy,
   disableCloudUser2FA,
   enableCloudUser2FA,
+  fetchCloudTeamContext,
   fetchCloudSyncPolicy,
   getCloudUser2FAStatus,
   getCloudLicenseStatus,
@@ -46,6 +47,8 @@ import {
   readCloudSyncCursor,
   registerCloudSync,
   shouldAllowManualSyncUrlEntry,
+  switchCloudSyncTeam,
+  type CloudTeamSummary,
   type RotateCloudSSHKeyPayload,
   writeCloudSyncCursor,
   type CloudUser2FABeginResponse,
@@ -113,6 +116,8 @@ interface HostState {
   saveError: string | null;
   cloudSyncSession: CloudSyncSession | null;
   cloudSyncPolicy: CloudSyncPolicy | null;
+  cloudTeams: CloudTeamSummary[];
+  currentCloudTeamRole: string | null;
   cloudLicenseStatus: CloudLicenseStatus | null;
   cloudUser2FAStatus: CloudUser2FAStatus | null;
   cloudUser2FASetup: CloudUser2FABeginResponse | null;
@@ -128,6 +133,7 @@ interface HostState {
   cloudSSHOverlapDays: number;
   isLoadingCloudDevices: boolean;
   isLoadingCloudSSHKeys: boolean;
+  isLoadingCloudTeams: boolean;
   isSyncingCloud: boolean;
   cloudSyncError: string | null;
   activeSessions: TerminalSession[];
@@ -160,6 +166,8 @@ interface HostState {
   ) => Promise<void>;
   logoutCloudAccount: () => void;
   refreshCloudSyncPolicy: (options?: { silent?: boolean }) => Promise<void>;
+  refreshCloudTeamContext: (options?: { silent?: boolean; preferredTeamId?: string | null }) => Promise<void>;
+  switchCloudTeam: (teamId: string | null) => Promise<void>;
   refreshCloudLicenseStatus: (options?: { silent?: boolean }) => Promise<void>;
   refreshCloudUser2FAStatus: () => Promise<void>;
   beginCloudUser2FASetup: () => Promise<void>;
@@ -922,6 +930,23 @@ const persistCloudCursor = (
   });
 };
 
+const applyTeamContextToSession = (
+  session: CloudSyncSession,
+  context: {
+    personalSpace: boolean;
+    currentTeamId: string;
+    currentRole: string;
+  }
+): CloudSyncSession => {
+  const nextTeamId = context.personalSpace ? '' : context.currentTeamId.trim();
+  const nextRole = context.currentRole.trim();
+  return {
+    ...session,
+    currentTeamId: nextTeamId || undefined,
+    currentTeamRole: nextRole || undefined
+  };
+};
+
 const enqueueCloudSyncTask = <T>(task: () => Promise<T>): Promise<T> => {
   const next = cloudSyncQueue.then(task, task);
   cloudSyncQueue = next.then(
@@ -955,6 +980,8 @@ export const useHostStore = create<HostState>((set, get) => ({
   saveError: null,
   cloudSyncSession: initialCloudSyncSession,
   cloudSyncPolicy: initialCloudSyncPolicy,
+  cloudTeams: [],
+  currentCloudTeamRole: initialCloudSyncSession?.currentTeamRole ?? null,
   cloudLicenseStatus: null,
   cloudUser2FAStatus: null,
   cloudUser2FASetup: null,
@@ -970,6 +997,7 @@ export const useHostStore = create<HostState>((set, get) => ({
   cloudSSHOverlapDays: 7,
   isLoadingCloudDevices: false,
   isLoadingCloudSSHKeys: false,
+  isLoadingCloudTeams: false,
   isSyncingCloud: false,
   cloudSyncError: null,
   activeSessions: [],
@@ -1013,6 +1041,8 @@ export const useHostStore = create<HostState>((set, get) => ({
         saveError: null,
         cloudSyncSession: cloudSession,
         cloudSyncPolicy: cloudPolicy,
+        cloudTeams: [],
+        currentCloudTeamRole: cloudSession?.currentTeamRole ?? null,
         cloudLicenseStatus: null,
         cloudUser2FAStatus: null,
         cloudUser2FASetup: null,
@@ -1027,6 +1057,7 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSSHOverlapDays: 7,
         isLoadingCloudDevices: false,
         isLoadingCloudSSHKeys: false,
+        isLoadingCloudTeams: false,
         cloudSyncError: null
       });
       if (normalized.discarded > 0) {
@@ -1044,6 +1075,7 @@ export const useHostStore = create<HostState>((set, get) => ({
       if (cloudSession) {
         void (async () => {
           await get().refreshCloudSyncPolicy({ silent: true });
+          await get().refreshCloudTeamContext({ silent: true });
           await Promise.all([
             get().syncPullFromCloud({ source: 'auto' }),
             get().loadCloudDevices(),
@@ -1064,6 +1096,8 @@ export const useHostStore = create<HostState>((set, get) => ({
         vaultVersion: null,
         vaultUpdatedAt: null,
         cloudSyncPolicy: readCloudSyncPolicy(),
+        cloudTeams: [],
+        currentCloudTeamRole: null,
         cloudLicenseStatus: null,
         cloudUser2FAStatus: null,
         cloudUser2FASetup: null,
@@ -1077,7 +1111,8 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSSHDefaultTtlDays: 90,
         cloudSSHOverlapDays: 7,
         isLoadingCloudDevices: false,
-        isLoadingCloudSSHKeys: false
+        isLoadingCloudSSHKeys: false,
+        isLoadingCloudTeams: false
       });
     }
   },
@@ -1114,6 +1149,8 @@ export const useHostStore = create<HostState>((set, get) => ({
         saveError: null,
         cloudSyncSession: cloudSession,
         cloudSyncPolicy: cloudPolicy,
+        cloudTeams: [],
+        currentCloudTeamRole: cloudSession?.currentTeamRole ?? null,
         cloudLicenseStatus: null,
         cloudUser2FAStatus: null,
         cloudUser2FASetup: null,
@@ -1128,6 +1165,7 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSSHOverlapDays: 7,
         isLoadingCloudDevices: false,
         isLoadingCloudSSHKeys: false,
+        isLoadingCloudTeams: false,
         cloudSyncError: null
       });
       if (normalized.discarded > 0) {
@@ -1137,6 +1175,7 @@ export const useHostStore = create<HostState>((set, get) => ({
       if (cloudSession) {
         void (async () => {
           await get().refreshCloudSyncPolicy({ silent: true });
+          await get().refreshCloudTeamContext({ silent: true });
           await Promise.all([
             get().syncPullFromCloud({ source: 'auto' }),
             get().loadCloudDevices(),
@@ -1157,6 +1196,8 @@ export const useHostStore = create<HostState>((set, get) => ({
         vaultVersion: null,
         vaultUpdatedAt: null,
         cloudSyncPolicy: readCloudSyncPolicy(),
+        cloudTeams: [],
+        currentCloudTeamRole: null,
         cloudLicenseStatus: null,
         cloudUser2FAStatus: null,
         cloudUser2FASetup: null,
@@ -1170,7 +1211,8 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSSHDefaultTtlDays: 90,
         cloudSSHOverlapDays: 7,
         isLoadingCloudDevices: false,
-        isLoadingCloudSSHKeys: false
+        isLoadingCloudSSHKeys: false,
+        isLoadingCloudTeams: false
       });
     }
   },
@@ -1201,6 +1243,8 @@ export const useHostStore = create<HostState>((set, get) => ({
       snippets: [],
       vaultVersion: null,
       vaultUpdatedAt: null,
+      cloudTeams: [],
+      currentCloudTeamRole: null,
       cloudLicenseStatus: null,
       cloudUser2FAStatus: null,
       cloudUser2FASetup: null,
@@ -1215,6 +1259,7 @@ export const useHostStore = create<HostState>((set, get) => ({
       cloudSSHOverlapDays: 7,
       isLoadingCloudDevices: false,
       isLoadingCloudSSHKeys: false,
+      isLoadingCloudTeams: false,
       activeSessions: [],
       activeSessionId: null,
       terminalError: null,
@@ -1244,6 +1289,8 @@ export const useHostStore = create<HostState>((set, get) => ({
       set({
         cloudSyncSession: session,
         cloudSyncPolicy: policy,
+        cloudTeams: [],
+        currentCloudTeamRole: session.currentTeamRole ?? null,
         cloudLicenseStatus: null,
         cloudUser2FAStatus: null,
         cloudUser2FASetup: null,
@@ -1258,11 +1305,13 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSSHOverlapDays: 7,
         isLoadingCloudDevices: false,
         isLoadingCloudSSHKeys: false,
+        isLoadingCloudTeams: false,
         isSyncingCloud: false,
         cloudSyncError: null
       });
       if (get().appView === 'dashboard') {
         await get().refreshCloudSyncPolicy({ silent: true });
+        await get().refreshCloudTeamContext({ silent: true });
         await Promise.all([
           get().syncPullFromCloud({ source: 'auto' }),
           get().loadCloudDevices(),
@@ -1312,6 +1361,8 @@ export const useHostStore = create<HostState>((set, get) => ({
       set({
         cloudSyncSession: session,
         cloudSyncPolicy: policy,
+        cloudTeams: [],
+        currentCloudTeamRole: session.currentTeamRole ?? null,
         cloudLicenseStatus: null,
         cloudUser2FAStatus: null,
         cloudUser2FASetup: null,
@@ -1326,11 +1377,13 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSSHOverlapDays: 7,
         isLoadingCloudDevices: false,
         isLoadingCloudSSHKeys: false,
+        isLoadingCloudTeams: false,
         isSyncingCloud: false,
         cloudSyncError: null
       });
       if (get().appView === 'dashboard') {
         await get().refreshCloudSyncPolicy({ silent: true });
+        await get().refreshCloudTeamContext({ silent: true });
         await Promise.all([
           get().syncPullFromCloud({ source: 'auto' }),
           get().loadCloudDevices(),
@@ -1362,6 +1415,8 @@ export const useHostStore = create<HostState>((set, get) => ({
     clearCloudSyncSession();
     set({
       cloudSyncSession: null,
+      cloudTeams: [],
+      currentCloudTeamRole: null,
       cloudLicenseStatus: null,
       cloudUser2FAStatus: null,
       cloudUser2FASetup: null,
@@ -1377,6 +1432,7 @@ export const useHostStore = create<HostState>((set, get) => ({
       cloudSSHOverlapDays: 7,
       isLoadingCloudDevices: false,
       isLoadingCloudSSHKeys: false,
+      isLoadingCloudTeams: false,
       cloudSyncError: null
     });
   },
@@ -1519,6 +1575,90 @@ export const useHostStore = create<HostState>((set, get) => ({
       logAppWarn('cloud-sync', '刷新同步策略失败', {
         message: message || fallback
       });
+    }
+  },
+  refreshCloudTeamContext: async (options) => {
+    const state = get();
+    const session = state.cloudSyncSession ?? readCloudSyncSession();
+    if (!session || state.appView !== 'dashboard') {
+      set({
+        cloudTeams: [],
+        currentCloudTeamRole: null,
+        isLoadingCloudTeams: false
+      });
+      return;
+    }
+    set({
+      isLoadingCloudTeams: true
+    });
+    try {
+      const context = await fetchCloudTeamContext(session, {
+        teamId: options?.preferredTeamId ?? session.currentTeamId ?? ''
+      });
+      const nextSession = applyTeamContextToSession(session, context);
+      persistCloudSyncSession(nextSession);
+      set({
+        cloudSyncSession: nextSession,
+        cloudTeams: context.items,
+        currentCloudTeamRole: context.currentRole || null,
+        isLoadingCloudTeams: false,
+        cloudSyncError: null
+      });
+    } catch (error) {
+      const fallback = '读取团队上下文失败，请稍后重试。';
+      const message = extractErrorMessage(error, fallback);
+      set({
+        isLoadingCloudTeams: false,
+        cloudTeams: [],
+        currentCloudTeamRole: null,
+        cloudSyncError: options?.silent ? state.cloudSyncError : message || fallback
+      });
+    }
+  },
+  switchCloudTeam: async (teamId) => {
+    const state = get();
+    const session = state.cloudSyncSession ?? readCloudSyncSession();
+    if (!session || state.appView !== 'dashboard') {
+      throw new Error('请先登录同步账号。');
+    }
+    set({
+      isLoadingCloudTeams: true,
+      isSyncingCloud: true,
+      cloudSyncError: null
+    });
+    try {
+      const switched = await switchCloudSyncTeam(session, teamId);
+      const nextSession = switched.session;
+      const cloudCursor = readCloudSyncCursor(nextSession);
+      set({
+        cloudSyncSession: nextSession,
+        cloudTeams: switched.context.items,
+        currentCloudTeamRole: switched.context.currentRole || null,
+        cloudSyncVersion: cloudCursor?.version ?? null,
+        cloudSyncLastAt: cloudCursor?.updatedAt ?? null,
+        // Clear workspace immediately; data is rehydrated by pull.
+        hosts: [],
+        identities: [],
+        snippets: [],
+        activeSessions: [],
+        activeSessionId: null,
+        terminalError: null,
+        isLoadingCloudTeams: false
+      });
+      await get().syncPullFromCloud({ source: 'manual', force: true });
+      set({
+        isSyncingCloud: false,
+        cloudSyncError: null
+      });
+    } catch (error) {
+      const fallback = '切换团队失败，请稍后重试。';
+      const message = extractErrorMessage(error, fallback);
+      set({
+        isLoadingCloudTeams: false,
+        isSyncingCloud: false,
+        cloudSyncError: message || fallback
+      });
+      throw new Error(message || fallback);
     }
   },
   refreshCloudLicenseStatus: async (options) => {
@@ -1870,6 +2010,8 @@ export const useHostStore = create<HostState>((set, get) => ({
         clearCloudSyncSession();
         set({
           cloudSyncSession: null,
+          cloudTeams: [],
+          currentCloudTeamRole: null,
           cloudLicenseStatus: null,
           cloudUser2FAStatus: null,
           cloudUser2FASetup: null,
@@ -1884,6 +2026,7 @@ export const useHostStore = create<HostState>((set, get) => ({
           cloudSSHOverlapDays: 7,
           isLoadingCloudDevices: false,
           isLoadingCloudSSHKeys: false,
+          isLoadingCloudTeams: false,
           cloudSyncError: null
         });
         toast.message('当前设备已退出云同步登录。');
@@ -1923,6 +2066,8 @@ export const useHostStore = create<HostState>((set, get) => ({
       clearCloudSyncSession();
       set({
         cloudSyncSession: null,
+        cloudTeams: [],
+        currentCloudTeamRole: null,
         cloudLicenseStatus: null,
         cloudUser2FAStatus: null,
         cloudUser2FASetup: null,
@@ -1937,6 +2082,7 @@ export const useHostStore = create<HostState>((set, get) => ({
         cloudSSHOverlapDays: 7,
         isLoadingCloudDevices: false,
         isLoadingCloudSSHKeys: false,
+        isLoadingCloudTeams: false,
         cloudSyncError: null
       });
       toast.success('已退出所有设备。');
@@ -2004,7 +2150,8 @@ export const useHostStore = create<HostState>((set, get) => ({
 
         const pushResult = await pushCloudSyncBlob(session, {
           version: baseVersion,
-          encryptedBlobBase64: localBlob.encryptedBlobBase64
+          encryptedBlobBase64: localBlob.encryptedBlobBase64,
+          hostCount: get().hosts.length
         });
         set({
           cloudSyncSession: session,
@@ -2121,7 +2268,8 @@ export const useHostStore = create<HostState>((set, get) => ({
             const localBlob = await exportVaultSyncBlob();
             const seeded = await pushCloudSyncBlob(session, {
               version: 0,
-              encryptedBlobBase64: localBlob.encryptedBlobBase64
+              encryptedBlobBase64: localBlob.encryptedBlobBase64,
+              hostCount: get().hosts.length
             });
             set({
               cloudSyncSession: session,
@@ -2181,7 +2329,8 @@ export const useHostStore = create<HostState>((set, get) => ({
           const localBlob = await exportVaultSyncBlob();
           const reconciled = await pushCloudSyncBlob(session, {
             version: remote.version,
-            encryptedBlobBase64: localBlob.encryptedBlobBase64
+            encryptedBlobBase64: localBlob.encryptedBlobBase64,
+            hostCount: get().hosts.length
           });
           set({
             cloudSyncSession: session,
