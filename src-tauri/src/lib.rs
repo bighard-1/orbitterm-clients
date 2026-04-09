@@ -12,7 +12,13 @@ mod vault;
 use std::collections::HashMap;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use std::fs;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use std::fs::{self, OpenOptions};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use std::io::Write;
 #[cfg(any(target_os = "android", target_os = "ios"))]
+use std::path::PathBuf;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::path::PathBuf;
 
 use error::SshBackendError;
@@ -653,6 +659,23 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn append_bootstrap_log(message: &str) {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let log_dir = base.join("OrbitTerm").join("logs");
+    let _ = fs::create_dir_all(&log_dir);
+    let log_file = log_dir.join("bootstrap.log");
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_file) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(file, "[{}] {}", ts, message);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -715,44 +738,54 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            let show_main_window_item = MenuItem::with_id(
-                app,
-                "show_main_window",
-                "显示主窗口",
-                true,
-                None::<&str>,
-            )?;
-            let quit_app_item =
-                MenuItem::with_id(app, "quit_app", "退出 OrbitTerm", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&show_main_window_item, &quit_app_item])?;
+            let tray_result = (|| -> tauri::Result<()> {
+                let show_main_window_item = MenuItem::with_id(
+                    app,
+                    "show_main_window",
+                    "显示主窗口",
+                    true,
+                    None::<&str>,
+                )?;
+                let quit_app_item =
+                    MenuItem::with_id(app, "quit_app", "退出 OrbitTerm", true, None::<&str>)?;
+                let tray_menu = Menu::with_items(app, &[&show_main_window_item, &quit_app_item])?;
 
-            TrayIconBuilder::new()
-                .menu(&tray_menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show_main_window" => {
-                        show_main_window(app);
-                    }
-                    "quit_app" => {
-                        app.exit(0);
-                    }
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        show_main_window(tray.app_handle());
-                    }
-                })
-                .build(app)?;
+                TrayIconBuilder::new()
+                    .menu(&tray_menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id().as_ref() {
+                        "show_main_window" => {
+                            show_main_window(app);
+                        }
+                        "quit_app" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            show_main_window(tray.app_handle());
+                        }
+                    })
+                    .build(app)?;
+                Ok(())
+            })();
+
+            if let Err(err) = tray_result {
+                append_bootstrap_log(&format!("tray_init_failed: {}", err));
+                show_main_window(app.app_handle());
+            }
             Ok(())
         });
 
     if let Err(err) = app.run(tauri::generate_context!()) {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        append_bootstrap_log(&format!("app_run_failed: {}", err));
         let message = SshBackendError::Protocol(err.to_string()).user_message();
         eprintln!("{message}");
     }
