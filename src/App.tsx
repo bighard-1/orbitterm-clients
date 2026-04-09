@@ -130,7 +130,7 @@ interface TerminalPerfSummary {
 const toolbarButtonClass =
   'rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/68 px-2.5 py-1 text-[10px] font-medium text-slate-200 hover:bg-slate-800/74 disabled:cursor-not-allowed disabled:opacity-55';
 const darkPanelButtonClass =
-  'ot-compact-hit rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/80 px-2 py-[1px] text-[10px] leading-4 font-medium text-slate-200 hover:bg-slate-800/86';
+  'ot-compact-hit inline-flex items-center gap-1 whitespace-nowrap rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/80 px-2 py-[1px] text-[10px] leading-4 font-medium text-slate-200 hover:bg-slate-800/86';
 const compactDarkPanelButtonClass =
   'ot-compact-hit h-[18px] rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/80 px-2 py-0 text-[10px] leading-[1] font-medium text-slate-200 hover:bg-slate-800/86';
 const SFTP_PANEL_MIN_WIDTH = 280;
@@ -232,6 +232,8 @@ type AppLocalePack = {
   terminalRestore: string;
   terminalExpandSftp: string;
   terminalCollapseSftp: string;
+  terminalCommandBar: string;
+  terminalHostInfo: string;
   terminalNoSession: string;
   terminalNoSessionPlaceholder: string;
   terminalPreInputLabel: string;
@@ -303,6 +305,8 @@ const APP_LOCALE_PACKS: Record<'zh-CN' | 'zh-TW' | 'en-US' | 'ja-JP', AppLocaleP
     terminalRestore: '恢复',
     terminalExpandSftp: '展开 SFTP',
     terminalCollapseSftp: '收起 SFTP',
+    terminalCommandBar: '命令栏',
+    terminalHostInfo: '主机信息',
     terminalNoSession: '暂无会话，请点击“新建窗口”或在主机列表中连接。',
     terminalNoSessionPlaceholder: '请选择一台主机并点击“连接”，或使用“新建窗口”。',
     terminalPreInputLabel: '预输入命令（可编辑，按 Enter 发送并执行）',
@@ -372,6 +376,8 @@ const APP_LOCALE_PACKS: Record<'zh-CN' | 'zh-TW' | 'en-US' | 'ja-JP', AppLocaleP
     terminalRestore: '還原',
     terminalExpandSftp: '展開 SFTP',
     terminalCollapseSftp: '收起 SFTP',
+    terminalCommandBar: '命令欄',
+    terminalHostInfo: '主機資訊',
     terminalNoSession: '尚無會話，請點擊「新建視窗」或在主機清單連線。',
     terminalNoSessionPlaceholder: '請選擇主機並點擊「連線」，或使用「新建視窗」。',
     terminalPreInputLabel: '預輸入命令（可編輯，按 Enter 送出）',
@@ -441,6 +447,8 @@ const APP_LOCALE_PACKS: Record<'zh-CN' | 'zh-TW' | 'en-US' | 'ja-JP', AppLocaleP
     terminalRestore: 'Restore',
     terminalExpandSftp: 'Expand SFTP',
     terminalCollapseSftp: 'Collapse SFTP',
+    terminalCommandBar: 'Command Bar',
+    terminalHostInfo: 'Host Info',
     terminalNoSession: 'No session yet. Click New Window or connect from host list.',
     terminalNoSessionPlaceholder: 'Choose a host and click Connect, or use New Window.',
     terminalPreInputLabel: 'Pre-input command (editable, press Enter to run)',
@@ -510,6 +518,8 @@ const APP_LOCALE_PACKS: Record<'zh-CN' | 'zh-TW' | 'en-US' | 'ja-JP', AppLocaleP
     terminalRestore: '元に戻す',
     terminalExpandSftp: 'SFTP を展開',
     terminalCollapseSftp: 'SFTP を折りたたむ',
+    terminalCommandBar: 'コマンドバー',
+    terminalHostInfo: 'ホスト情報',
     terminalNoSession: 'セッションがありません。新規ウィンドウかホスト一覧から接続してください。',
     terminalNoSessionPlaceholder: 'ホストを選択して接続するか、新規ウィンドウを使ってください。',
     terminalPreInputLabel: '事前入力コマンド（編集可・Enter で実行）',
@@ -1161,6 +1171,9 @@ function App(): JSX.Element {
   const saveError = useHostStore((state) => state.saveError);
   const cloudSyncSession = useHostStore((state) => state.cloudSyncSession);
   const cloudSyncPolicy = useHostStore((state) => state.cloudSyncPolicy);
+  const cloudTeams = useHostStore((state) => state.cloudTeams);
+  const currentCloudTeamRole = useHostStore((state) => state.currentCloudTeamRole);
+  const isLoadingCloudTeams = useHostStore((state) => state.isLoadingCloudTeams);
   const cloudLicenseStatus = useHostStore((state) => state.cloudLicenseStatus);
   const cloudSyncLastAt = useHostStore((state) => state.cloudSyncLastAt);
   const isSyncingCloud = useHostStore((state) => state.isSyncingCloud);
@@ -1168,6 +1181,8 @@ function App(): JSX.Element {
   const syncPullFromCloud = useHostStore((state) => state.syncPullFromCloud);
   const syncPushToCloud = useHostStore((state) => state.syncPushToCloud);
   const refreshCloudSyncPolicy = useHostStore((state) => state.refreshCloudSyncPolicy);
+  const refreshCloudTeamContext = useHostStore((state) => state.refreshCloudTeamContext);
+  const switchCloudTeam = useHostStore((state) => state.switchCloudTeam);
   const refreshCloudLicenseStatus = useHostStore((state) => state.refreshCloudLicenseStatus);
   const refreshCloudUser2FAStatus = useHostStore((state) => state.refreshCloudUser2FAStatus);
   const loadCloudDevices = useHostStore((state) => state.loadCloudDevices);
@@ -1431,6 +1446,26 @@ function App(): JSX.Element {
     }
     return source.slice(0, 2).toUpperCase();
   }, [cloudSyncSession]);
+  const currentCloudTeamId = useMemo(() => {
+    const teamId = cloudSyncSession?.currentTeamId?.trim();
+    return teamId || '';
+  }, [cloudSyncSession]);
+  const currentCloudTeamName = useMemo(() => {
+    if (!currentCloudTeamId) {
+      if (locale === 'zh-CN') {
+        return '个人空间';
+      }
+      if (locale === 'zh-TW') {
+        return '個人空間';
+      }
+      if (locale === 'ja-JP') {
+        return '個人スペース';
+      }
+      return 'Personal';
+    }
+    const matched = cloudTeams.find((item) => item.id === currentCloudTeamId);
+    return matched?.name ?? currentCloudTeamId;
+  }, [cloudTeams, currentCloudTeamId, locale]);
   const proExpiryText = useMemo(() => {
     if (!isProLicenseActive || !cloudLicenseStatus) {
       return '--';
@@ -3102,10 +3137,18 @@ function App(): JSX.Element {
     if (appView !== 'dashboard' || !cloudSyncSession) {
       return;
     }
+    void refreshCloudTeamContext({ silent: true });
+  }, [appView, cloudSyncSession, refreshCloudTeamContext]);
+
+  useEffect(() => {
+    if (appView !== 'dashboard' || !cloudSyncSession) {
+      return;
+    }
 
     const runAutoPull = (): void => {
       void (async () => {
         await refreshCloudSyncPolicy({ silent: true });
+        await refreshCloudTeamContext({ silent: true });
         await syncPullFromCloud({ source: 'auto' });
       })();
     };
@@ -3129,7 +3172,7 @@ function App(): JSX.Element {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [appView, cloudSyncSession, refreshCloudSyncPolicy, syncPullFromCloud]);
+  }, [appView, cloudSyncSession, refreshCloudSyncPolicy, refreshCloudTeamContext, syncPullFromCloud]);
 
   useEffect(() => {
     if (appView !== 'dashboard' || !cloudSyncSession) {
@@ -5247,6 +5290,62 @@ function App(): JSX.Element {
                       <p className="mt-0.5 text-[11px] text-slate-400">
                         {uiText.navSyncStatus}: {syncStatusText}
                       </p>
+                      <label className="mt-2 block text-[11px] text-slate-300">
+                        {locale === 'zh-CN'
+                          ? '当前空间'
+                          : locale === 'zh-TW'
+                            ? '目前空間'
+                            : locale === 'ja-JP'
+                              ? '現在のスペース'
+                              : 'Current Space'}
+                        <select
+                          className="mt-1 w-full rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/72 px-2 py-1 text-xs text-slate-100 outline-none focus:border-[#90b6ec]"
+                          disabled={!cloudSyncSession || isLoadingCloudTeams}
+                          onChange={(event) => {
+                            const nextTeamId = event.target.value.trim();
+                            void switchCloudTeam(nextTeamId || null).catch((error) => {
+                              toast.error(
+                                error instanceof Error
+                                  ? error.message
+                                  : locale === 'zh-CN'
+                                    ? '切换空间失败'
+                                    : locale === 'zh-TW'
+                                      ? '切換空間失敗'
+                                      : locale === 'ja-JP'
+                                        ? 'スペース切替に失敗しました'
+                                        : 'Failed to switch space'
+                              );
+                            });
+                          }}
+                          value={currentCloudTeamId}
+                        >
+                          <option value="">
+                            {locale === 'zh-CN'
+                              ? '个人空间'
+                              : locale === 'zh-TW'
+                                ? '個人空間'
+                                : locale === 'ja-JP'
+                                  ? '個人スペース'
+                                  : 'Personal'}
+                          </option>
+                          {cloudTeams.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        {locale === 'zh-CN'
+                          ? `角色：${currentCloudTeamRole ?? 'Owner'}`
+                          : locale === 'zh-TW'
+                            ? `角色：${currentCloudTeamRole ?? 'Owner'}`
+                            : locale === 'ja-JP'
+                              ? `ロール：${currentCloudTeamRole ?? 'Owner'}`
+                              : `Role: ${currentCloudTeamRole ?? 'Owner'}`}
+                        {' · '}
+                        {currentCloudTeamName}
+                      </p>
                     </div>
                     <div className="mt-2 rounded-[var(--radius)] border border-slate-700/70 bg-slate-900/66 px-3 py-2">
                       {!isProLicenseActive ? (
@@ -6100,7 +6199,7 @@ function App(): JSX.Element {
                                   }}
                                   type="button"
                                 >
-                                  {deployingHostId === hostId ? uiText.hostDeployingKey : `🔐`}
+                                  {deployingHostId === hostId ? uiText.hostDeployingKey : `🔐 ${uiText.hostDeployKey}`}
                                 </button>
                                 <button
                                   className="rounded-[var(--radius)] border border-slate-600/70 bg-slate-900/72 px-2 py-1 text-[10px] font-medium text-slate-200 hover:bg-slate-800/74"
@@ -6109,7 +6208,7 @@ function App(): JSX.Element {
                                   }}
                                   type="button"
                                 >
-                                  ✎
+                                  {`✎ ${uiText.hostEdit}`}
                                 </button>
                                 <button
                                   className="rounded-[var(--radius)] border border-rose-700/60 bg-rose-950/40 px-2 py-1 text-[10px] font-medium text-rose-300 hover:bg-rose-900/55"
@@ -6121,7 +6220,7 @@ function App(): JSX.Element {
                                   }}
                                   type="button"
                                 >
-                                  ⌫
+                                  {`⌫ ${uiText.hostDelete}`}
                                 </button>
                               </div>
                             )}
@@ -6219,7 +6318,7 @@ function App(): JSX.Element {
                         title={uiText.terminalNewWindow}
                         type="button"
                       >
-                        ＋
+                        {`＋ ${uiText.terminalNewWindow}`}
                       </button>
                       <button
                         className={darkPanelButtonClass}
@@ -6228,7 +6327,7 @@ function App(): JSX.Element {
                         }}
                         type="button"
                       >
-                        📜
+                        {`📜 ${uiText.terminalLogs}`}
                       </button>
                       <button
                         className={`${darkPanelButtonClass} ${
@@ -6240,7 +6339,7 @@ function App(): JSX.Element {
                         title={isDesktopCommandBarVisible ? '隐藏命令栏 (Cmd/Ctrl+J)' : '显示命令栏 (Cmd/Ctrl+J)'}
                         type="button"
                       >
-                        ⌘
+                        {`⌘ ${uiText.terminalCommandBar}`}
                       </button>
                       {activeTerminalSessionId && isActiveSessionSsh && (
                         <button
@@ -6250,7 +6349,7 @@ function App(): JSX.Element {
                           }}
                           type="button"
                         >
-                          主机信息
+                          {uiText.terminalHostInfo}
                         </button>
                       )}
                       {activeTerminalSessionId && isActiveSessionSsh && (
@@ -6300,39 +6399,43 @@ function App(): JSX.Element {
                       {activeSessionId && (
                         <button
                           className={darkPanelButtonClass}
-                          onClick={() => {
-                            void handleToggleWindowMaximize();
-                          }}
-                          title={isWindowMaximized ? uiText.terminalRestore : uiText.terminalMaximize}
-                          type="button"
-                        >
-                          {isWindowMaximized ? '🗗' : '🗖'}
-                        </button>
-                      )}
-                      {activeSessionId && (
+                        onClick={() => {
+                          void handleToggleWindowMaximize();
+                        }}
+                        title={isWindowMaximized ? uiText.terminalRestore : uiText.terminalMaximize}
+                        type="button"
+                      >
+                          {isWindowMaximized
+                            ? `🗗 ${uiText.terminalRestore}`
+                            : `🗖 ${uiText.terminalMaximize}`}
+                      </button>
+                    )}
+                    {activeSessionId && (
                         <button
                           className={darkPanelButtonClass}
-                          onClick={() => {
-                            void handleCloseActiveTerminal();
-                          }}
-                          title={uiText.terminalCloseCurrent}
-                          type="button"
-                        >
-                          ✕
-                        </button>
-                      )}
-                      {activeTerminalSessionId && isActiveSessionSsh && (
+                        onClick={() => {
+                          void handleCloseActiveTerminal();
+                        }}
+                        title={uiText.terminalCloseCurrent}
+                        type="button"
+                      >
+                          {`✕ ${uiText.terminalCloseCurrent}`}
+                      </button>
+                    )}
+                    {activeTerminalSessionId && isActiveSessionSsh && (
                         <button
                           className={`${darkPanelButtonClass} ${isSftpCollapsed ? '' : 'border-[#3570d9] bg-[#153265] text-[#d7e6ff]'}`}
-                          onClick={() => {
-                            setIsSftpCollapsed((prev) => !prev);
-                          }}
-                          title={isSftpCollapsed ? '展开 SFTP (Cmd/Ctrl+B)' : '收起 SFTP (Cmd/Ctrl+B)'}
-                          type="button"
-                        >
-                          {isSftpCollapsed ? '🗂' : '🗂'}
-                        </button>
-                      )}
+                        onClick={() => {
+                          setIsSftpCollapsed((prev) => !prev);
+                        }}
+                        title={isSftpCollapsed ? '展开 SFTP (Cmd/Ctrl+B)' : '收起 SFTP (Cmd/Ctrl+B)'}
+                        type="button"
+                      >
+                          {isSftpCollapsed
+                            ? `🗂 ${uiText.terminalExpandSftp}`
+                            : `🗂 ${uiText.terminalCollapseSftp}`}
+                      </button>
+                    )}
                     </>
                   ) : (
                     <div className="flex items-center gap-1">

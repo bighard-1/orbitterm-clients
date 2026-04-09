@@ -29,6 +29,32 @@ export interface CloudSyncSession {
   email: string;
   token: string;
   currentDeviceId?: string;
+  currentTeamId?: string;
+  currentTeamRole?: string;
+}
+
+export interface CloudTeamSummary {
+  id: string;
+  name: string;
+  role: string;
+  planId?: string;
+  maxSeats: number;
+  usedSeats: number;
+  maxHosts: number;
+  maxDevices: number;
+  allowSftp: boolean;
+  allowSyncWrite: boolean;
+}
+
+export interface CloudTeamContextResponse {
+  personalSpace: boolean;
+  currentTeamId: string;
+  currentRole: string;
+  items: CloudTeamSummary[];
+}
+
+interface CloudTeamListResponse {
+  items: CloudTeamSummary[];
 }
 
 export interface AuthResponse {
@@ -55,6 +81,7 @@ export interface PasswordResetSubmitResponse {
 export interface SyncPushRequest {
   version: number;
   encryptedBlobBase64: string;
+  hostCount?: number;
 }
 
 export interface SyncPushResponse {
@@ -977,6 +1004,80 @@ const normalizeSyncPushResponse = (payload: unknown): SyncPushResponse => {
   };
 };
 
+const parseOptionalInteger = (value: unknown, fallback = 0): number => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, Math.trunc(value));
+  }
+  if (typeof value === 'string') {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isFinite(parsed)) {
+      return Math.max(0, parsed);
+    }
+  }
+  return fallback;
+};
+
+const normalizeTeamSummary = (payload: unknown): CloudTeamSummary | null => {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const raw = payload as Record<string, unknown>;
+  const id = readString(raw, ['id']);
+  const name = readString(raw, ['name']);
+  if (!id || !name) {
+    return null;
+  }
+  return {
+    id,
+    name,
+    role: readString(raw, ['role']) ?? 'Member',
+    planId: readString(raw, ['planId', 'plan_id']),
+    maxSeats: parseOptionalInteger(raw.maxSeats ?? raw.max_seats, 0),
+    usedSeats: parseOptionalInteger(raw.usedSeats ?? raw.used_seats, 0),
+    maxHosts: parseOptionalInteger(raw.maxHosts ?? raw.max_hosts, 0),
+    maxDevices: parseOptionalInteger(raw.maxDevices ?? raw.max_devices, 0),
+    allowSftp: readBoolean(raw, ['allowSftp', 'allow_sftp']) === true,
+    allowSyncWrite: readBoolean(raw, ['allowSyncWrite', 'allow_sync_write']) !== false
+  };
+};
+
+const normalizeTeamContextResponse = (payload: unknown): CloudTeamContextResponse => {
+  if (!payload || typeof payload !== 'object') {
+    return {
+      personalSpace: true,
+      currentTeamId: '',
+      currentRole: 'Owner',
+      items: []
+    };
+  }
+  const raw = payload as Record<string, unknown>;
+  const listRaw = Array.isArray(raw.items) ? raw.items : [];
+  const items = listRaw
+    .map((item) => normalizeTeamSummary(item))
+    .filter((item): item is CloudTeamSummary => Boolean(item));
+  const personalSpace = readBoolean(raw, ['personalSpace', 'personal_space']) !== false;
+  const currentTeamId = readString(raw, ['currentTeamId', 'current_team_id']) ?? '';
+  const currentRole = readString(raw, ['currentRole', 'current_role']) ?? 'Owner';
+  return {
+    personalSpace,
+    currentTeamId,
+    currentRole,
+    items
+  };
+};
+
+const normalizeTeamListResponse = (payload: unknown): CloudTeamListResponse => {
+  if (!payload || typeof payload !== 'object') {
+    return { items: [] };
+  }
+  const raw = payload as Record<string, unknown>;
+  const listRaw = Array.isArray(raw.items) ? raw.items : [];
+  const items = listRaw
+    .map((item) => normalizeTeamSummary(item))
+    .filter((item): item is CloudTeamSummary => Boolean(item));
+  return { items };
+};
+
 const saveSession = (session: CloudSyncSession): void => {
   window.localStorage.setItem(CLOUD_SYNC_SESSION_KEY, JSON.stringify(session));
 };
@@ -1114,6 +1215,16 @@ export const readCloudSyncSession = (): CloudSyncSession | null => {
       token: parsed.token,
       currentDeviceId: typeof parsed.currentDeviceId === 'string' ? parsed.currentDeviceId : undefined
     };
+    const parsedTeamId =
+      typeof parsed.currentTeamId === 'string' ? parsed.currentTeamId.trim() : '';
+    const parsedTeamRole =
+      typeof parsed.currentTeamRole === 'string' ? parsed.currentTeamRole.trim() : '';
+    if (parsedTeamId) {
+      session.currentTeamId = parsedTeamId;
+    }
+    if (parsedTeamRole) {
+      session.currentTeamRole = parsedTeamRole;
+    }
     if (migratedApiBaseUrl !== parsed.apiBaseUrl) {
       // Persist endpoint migration immediately so subsequent sync uses the new domain.
       saveSession(session);
@@ -1379,10 +1490,91 @@ export const resetCloudPassword = async (
   }
 };
 
-const authHeaders = (token: string): Record<string, string> => ({
-  'Content-Type': 'application/json',
-  Authorization: `Bearer ${token}`
-});
+const buildAuthHeaders = (
+  token: string,
+  options?: {
+    teamId?: string;
+    includeContentType?: boolean;
+  }
+): Record<string, string> => {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`
+  };
+  if (options?.includeContentType !== false) {
+    headers['Content-Type'] = 'application/json';
+  }
+  const teamID = options?.teamId?.trim();
+  if (teamID) {
+    headers['X-Team-ID'] = teamID;
+  }
+  return headers;
+};
+
+const authHeaders = (session: CloudSyncSession): Record<string, string> =>
+  buildAuthHeaders(session.token, {
+    teamId: session.currentTeamId,
+    includeContentType: true
+  });
+
+const authGetHeaders = (session: CloudSyncSession): Record<string, string> =>
+  buildAuthHeaders(session.token, {
+    teamId: session.currentTeamId,
+    includeContentType: false
+  });
+
+export const fetchCloudTeamContext = async (
+  session: CloudSyncSession,
+  options?: {
+    teamId?: string;
+  }
+): Promise<CloudTeamContextResponse> => {
+  const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
+  const response = await withTimeout(`${endpoint}/team/context`, {
+    method: 'GET',
+    headers: buildAuthHeaders(session.token, {
+      teamId: options?.teamId ?? session.currentTeamId,
+      includeContentType: false
+    })
+  });
+  const payload = await readJson<unknown>(response, '读取团队上下文失败，请稍后重试。');
+  return normalizeTeamContextResponse(payload);
+};
+
+export const listCloudTeams = async (
+  session: CloudSyncSession
+): Promise<CloudTeamSummary[]> => {
+  const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
+  const response = await withTimeout(`${endpoint}/team/list`, {
+    method: 'GET',
+    headers: authGetHeaders(session)
+  });
+  const payload = await readJson<unknown>(response, '读取团队列表失败，请稍后重试。');
+  return normalizeTeamListResponse(payload).items;
+};
+
+export const switchCloudSyncTeam = async (
+  session: CloudSyncSession,
+  teamId: string | null
+): Promise<{ session: CloudSyncSession; context: CloudTeamContextResponse }> => {
+  const desiredTeamId = (teamId ?? '').trim();
+  const context = await fetchCloudTeamContext(session, {
+    teamId: desiredTeamId
+  });
+  if (desiredTeamId) {
+    const hasMembership = context.items.some((item) => item.id === desiredTeamId);
+    if (!hasMembership) {
+      throw new Error('当前账号不属于目标团队，无法切换。');
+    }
+  }
+  const resolvedTeamId = context.personalSpace ? '' : context.currentTeamId.trim();
+  const nextSession: CloudSyncSession = {
+    ...session,
+    currentTeamId: resolvedTeamId || undefined,
+    currentTeamRole: context.currentRole?.trim() || undefined
+  };
+  saveSession(nextSession);
+  return { session: nextSession, context };
+};
 
 export const pushCloudSyncBlob = async (
   session: CloudSyncSession,
@@ -1395,12 +1587,16 @@ export const pushCloudSyncBlob = async (
     const response = await withTimeout(`${endpoint}/sync/push`, {
       method: 'POST',
       headers: {
-        ...authHeaders(session.token),
+        ...authHeaders(session),
         'X-Idempotency-Key': idempotencyKey
       },
       body: JSON.stringify({
         version: normalizedVersion,
-        encryptedBlobBase64: request.encryptedBlobBase64
+        encryptedBlobBase64: request.encryptedBlobBase64,
+        hostCount:
+          typeof request.hostCount === 'number' && Number.isFinite(request.hostCount)
+            ? Math.max(0, Math.trunc(request.hostCount))
+            : undefined
       })
     });
     if (response.status === 409) {
@@ -1430,9 +1626,7 @@ export const getCloudSyncStatus = async (session: CloudSyncSession): Promise<Syn
   return withRetry('sync-status', async () => {
     const response = await withTimeout(`${endpoint}/sync/status`, {
       method: 'GET',
-      headers: {
-        Authorization: `Bearer ${session.token}`
-      }
+      headers: authGetHeaders(session)
     });
     const payload = await readJson<unknown>(response, '获取同步状态失败，请稍后重试。');
     const normalized = normalizeSyncStatusResponse(payload);
@@ -1448,9 +1642,7 @@ export const pullCloudSyncBlob = async (session: CloudSyncSession): Promise<Sync
   return withRetry('sync-pull', async () => {
     const response = await withTimeout(`${endpoint}/sync/pull`, {
       method: 'GET',
-      headers: {
-        Authorization: `Bearer ${session.token}`
-      }
+      headers: authGetHeaders(session)
     });
     const payload = await readJson<unknown>(response, '同步拉取失败，请稍后重试。');
     const normalized = normalizeSyncPullResponse(payload);
@@ -1465,9 +1657,7 @@ export const listCloudDevices = async (session: CloudSyncSession): Promise<Cloud
   const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
   const response = await withTimeout(`${endpoint}/devices`, {
     method: 'GET',
-    headers: {
-      Authorization: `Bearer ${session.token}`
-    }
+    headers: authGetHeaders(session)
   });
   const payload = await readJson<CloudDevicesResponse>(response, '获取设备列表失败，请稍后重试。');
   return payload.devices;
@@ -1480,7 +1670,7 @@ export const logoutCloudDevice = async (
   const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
   const response = await withTimeout(`${endpoint}/logout/device`, {
     method: 'POST',
-    headers: authHeaders(session.token),
+    headers: authHeaders(session),
     body: JSON.stringify({
       deviceId
     })
@@ -1494,7 +1684,7 @@ export const logoutAllCloudDevices = async (
   const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
   const response = await withTimeout(`${endpoint}/logout/device`, {
     method: 'POST',
-    headers: authHeaders(session.token),
+    headers: authHeaders(session),
     body: JSON.stringify({
       revokeAll: true
     })
@@ -1508,9 +1698,7 @@ export const listCloudSSHKeys = async (
   const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
   const response = await withTimeout(`${endpoint}/ssh-keys`, {
     method: 'GET',
-    headers: {
-      Authorization: `Bearer ${session.token}`
-    }
+    headers: authGetHeaders(session)
   });
   return readJson<CloudSSHKeyListResponse>(response, '获取 SSH 密钥列表失败，请稍后重试。');
 };
@@ -1522,7 +1710,7 @@ export const rotateCloudSSHKey = async (
   const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
   const response = await withTimeout(`${endpoint}/ssh-keys/rotate`, {
     method: 'POST',
-    headers: authHeaders(session.token),
+    headers: authHeaders(session),
     body: JSON.stringify({
       publicKey: payload.publicKey,
       comment: payload.comment?.trim() || undefined,
@@ -1545,7 +1733,7 @@ export const revokeCloudSSHKey = async (
   const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
   const response = await withTimeout(`${endpoint}/ssh-keys/revoke`, {
     method: 'POST',
-    headers: authHeaders(session.token),
+    headers: authHeaders(session),
     body: JSON.stringify({
       keyId: payload.keyId?.trim() || undefined,
       fingerprint: payload.fingerprint?.trim() || undefined,
@@ -1718,9 +1906,7 @@ export const getCloudLicenseStatus = async (
   const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
   const response = await withTimeout(`${endpoint}/license/status`, {
     method: 'GET',
-    headers: {
-      Authorization: `Bearer ${session.token}`
-    }
+    headers: authGetHeaders(session)
   });
   return readJson<CloudLicenseStatus>(response, '读取授权状态失败，请稍后重试。');
 };
@@ -1731,9 +1917,7 @@ export const getCloudUser2FAStatus = async (
   const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
   const response = await withTimeout(`${endpoint}/2fa/status`, {
     method: 'GET',
-    headers: {
-      Authorization: `Bearer ${session.token}`
-    }
+    headers: authGetHeaders(session)
   });
   return readJson<CloudUser2FAStatus>(response, '读取 2FA 状态失败，请稍后重试。');
 };
@@ -1744,7 +1928,7 @@ export const beginCloudUser2FA = async (
   const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
   const response = await withTimeout(`${endpoint}/2fa/totp/begin`, {
     method: 'POST',
-    headers: authHeaders(session.token),
+    headers: authHeaders(session),
     body: JSON.stringify({})
   });
   return readJson<CloudUser2FABeginResponse>(response, '生成 2FA 密钥失败，请稍后重试。');
@@ -1760,7 +1944,7 @@ export const enableCloudUser2FA = async (
   const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
   const response = await withTimeout(`${endpoint}/2fa/totp/enable`, {
     method: 'POST',
-    headers: authHeaders(session.token),
+    headers: authHeaders(session),
     body: JSON.stringify({
       secret: payload.secret,
       otpCode: payload.otpCode
@@ -1779,7 +1963,7 @@ export const disableCloudUser2FA = async (
   const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
   const response = await withTimeout(`${endpoint}/2fa/totp/disable`, {
     method: 'POST',
-    headers: authHeaders(session.token),
+    headers: authHeaders(session),
     body: JSON.stringify({
       otpCode: payload.otpCode?.trim() || undefined,
       backupCode: payload.backupCode?.trim() || undefined
@@ -1795,7 +1979,7 @@ export const activateCloudLicense = async (
   const endpoint = ensureHttpsEndpoint(session.apiBaseUrl);
   const response = await withTimeout(`${endpoint}/license/activate`, {
     method: 'POST',
-    headers: authHeaders(session.token),
+    headers: authHeaders(session),
     body: JSON.stringify({ code })
   });
   return readJson<LicenseActivateResponse>(response, '激活失败，请稍后重试。');
