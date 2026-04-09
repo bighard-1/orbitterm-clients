@@ -62,6 +62,24 @@ $disableUpdaterScript = Join-Path $root "scripts\disable-tauri-updater.mjs"
 $srcTauriConfigPath = Join-Path $root "src-tauri\tauri.conf.json"
 $tmpTauriConfigPath = Join-Path $env:TEMP "orbitterm-tauri.conf.windows.no-updater.json"
 $backupTauriConfigPath = Join-Path $env:TEMP "orbitterm-tauri.conf.windows.backup.json"
+$configSwapped = $false
+
+function Restore-TauriConfig {
+  if (-not $configSwapped) { return }
+  if (Test-Path $tmpTauriConfigPath) {
+    Remove-Item -Path $tmpTauriConfigPath -Force -ErrorAction SilentlyContinue
+  }
+  if (Test-Path $backupTauriConfigPath) {
+    Copy-Item -Path $backupTauriConfigPath -Destination $srcTauriConfigPath -Force
+    Remove-Item -Path $backupTauriConfigPath -Force -ErrorAction SilentlyContinue
+  }
+  $script:configSwapped = $false
+}
+
+trap {
+  Restore-TauriConfig
+  throw $_
+}
 
 Write-Step "Project root: $root"
 Write-Step "Client repo: $ClientRepoPath"
@@ -73,6 +91,7 @@ if (Test-Path $disableUpdaterScript) {
   if ($LASTEXITCODE -ne 0) { throw "Failed to prepare updater-disabled tauri config." }
   Copy-Item -Path $srcTauriConfigPath -Destination $backupTauriConfigPath -Force
   Copy-Item -Path $tmpTauriConfigPath -Destination $srcTauriConfigPath -Force
+  $configSwapped = $true
 }
 
 if (-not $SkipBuild) {
@@ -127,7 +146,9 @@ $artifactFiles | ForEach-Object { Write-Host "  $($_.FullName)" }
 
 if ($NoPublish) {
   Write-Step "NoPublish set. Skip copying/publishing."
-  exit 0
+  Restore-TauriConfig
+  Write-Step "Done"
+  return
 }
 
 if (-not (Test-Path $ClientRepoPath)) {
@@ -219,12 +240,5 @@ if ($Push) {
   Pop-Location
 }
 
-if (Test-Path $tmpTauriConfigPath) {
-  Remove-Item -Path $tmpTauriConfigPath -Force -ErrorAction SilentlyContinue
-}
-if (Test-Path $backupTauriConfigPath) {
-  Copy-Item -Path $backupTauriConfigPath -Destination $srcTauriConfigPath -Force
-  Remove-Item -Path $backupTauriConfigPath -Force -ErrorAction SilentlyContinue
-}
-
+Restore-TauriConfig
 Write-Step "Done"

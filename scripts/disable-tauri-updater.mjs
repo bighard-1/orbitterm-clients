@@ -18,12 +18,8 @@ if (conf.tauri) {
   // Tauri v2 config shape
   conf.bundle = conf.bundle || {};
   conf.bundle.createUpdaterArtifacts = false;
-  if (conf.plugins && typeof conf.plugins === 'object' && conf.plugins.updater) {
-    delete conf.plugins.updater;
-    if (Object.keys(conf.plugins).length === 0) {
-      delete conf.plugins;
-    }
-  }
+  // Keep plugins.updater runtime config intact.
+  // Removing it may cause startup failure when updater plugin initializes.
 }
 
 fs.writeFileSync(dst, `${JSON.stringify(conf, null, 2)}\n`, 'utf8');
