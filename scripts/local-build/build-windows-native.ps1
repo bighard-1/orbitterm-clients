@@ -136,6 +136,11 @@ if (Test-Path $nsisDir) {
   $artifactFiles += Get-ChildItem -Path $nsisDir -File -Filter *.exe
 }
 $artifactFiles = $artifactFiles | Sort-Object FullName -Unique
+$releaseVersion = $ReleaseTag.TrimStart("v")
+$taggedArtifacts = $artifactFiles | Where-Object { $_.Name -like "*_$releaseVersion_*" }
+if ($taggedArtifacts -and $taggedArtifacts.Count -gt 0) {
+  $artifactFiles = $taggedArtifacts
+}
 
 if (-not $artifactFiles -or $artifactFiles.Count -eq 0) {
   throw "No Windows installer artifacts found in: $bundleRoot"
