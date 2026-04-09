@@ -35,6 +35,26 @@ function Write-Utf8NoBom {
   [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
 }
 
+function Normalize-VersionTag {
+  param([string]$Value)
+  if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
+  $trimmed = $Value.Trim()
+  if ($trimmed.StartsWith("v") -or $trimmed.StartsWith("V")) {
+    return "v$($trimmed.Substring(1))"
+  }
+  return "v$trimmed"
+}
+
+function Get-VersionFromArtifactName {
+  param([string]$Name)
+  if ([string]::IsNullOrWhiteSpace($Name)) { return "" }
+  $match = [regex]::Match($Name, '(\d+\.\d+\.\d+)')
+  if ($match.Success) {
+    return "v$($match.Groups[1].Value)"
+  }
+  return ""
+}
+
 if ($env:OS -ne "Windows_NT") {
   throw "This script must run on Windows host / Windows VM."
 }
@@ -204,6 +224,27 @@ foreach ($f in $artifactFiles) {
   }
 }
 $latest | Add-Member -MemberType NoteProperty -Name windowsPackages -Value $windowsPackages -Force
+$platformVersions = [ordered]@{
+  windows = ""
+  macArm = ""
+  macX64 = ""
+  linux = ""
+  android = ""
+}
+if ($latest.PSObject.Properties.Name -contains "platformVersions" -and $null -ne $latest.platformVersions) {
+  $platformVersions.windows = Normalize-VersionTag([string]$latest.platformVersions.windows)
+  $platformVersions.macArm = Normalize-VersionTag([string]$latest.platformVersions.macArm)
+  $platformVersions.macX64 = Normalize-VersionTag([string]$latest.platformVersions.macX64)
+  $platformVersions.linux = Normalize-VersionTag([string]$latest.platformVersions.linux)
+  $platformVersions.android = Normalize-VersionTag([string]$latest.platformVersions.android)
+}
+if (-not $platformVersions.windows) { $platformVersions.windows = Get-VersionFromArtifactName $primary }
+if (-not $platformVersions.windows) { $platformVersions.windows = Normalize-VersionTag $ReleaseTag }
+if (-not $platformVersions.macArm) { $platformVersions.macArm = Get-VersionFromArtifactName ([string]$latest.macPackage) }
+if (-not $platformVersions.macX64) { $platformVersions.macX64 = Get-VersionFromArtifactName ([string]$latest.macPackageX64) }
+if (-not $platformVersions.linux) { $platformVersions.linux = Get-VersionFromArtifactName ([string]$latest.linuxPackage) }
+if (-not $platformVersions.android) { $platformVersions.android = Get-VersionFromArtifactName ([string]$latest.androidPackage) }
+$latest | Add-Member -MemberType NoteProperty -Name platformVersions -Value $platformVersions -Force
 
 $manifestPath = Join-Path $releaseDir "release-manifest.json"
 $latestJson = $latest | ConvertTo-Json -Depth 30

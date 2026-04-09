@@ -59,5 +59,12 @@
       "file": "OrbitTerm_0.1.90_x64-setup.exe",
       "sha256": "a22ee599f85c7f25c5a382e53a4511cdce5f389fbe7b30d01da7ddf368020465"
     }
+  },
+  "platformVersions": {
+    "windows": "v0.1.90",
+    "macArm": "v0.1.88",
+    "macX64": "v0.1.88",
+    "linux": "v0.1.88",
+    "android": "v0.1.88"
   }
 }

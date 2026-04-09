@@ -53,6 +53,18 @@ function kindFromExt(ext) {
   return ext.replace('.', '');
 }
 
+function extractVersionFromArtifactName(value) {
+  if (!value) return '';
+  const match = String(value).match(/(\d+\.\d+\.\d+)/);
+  return match ? `v${match[1]}` : '';
+}
+
+function normalizeVersionTag(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  return /^v/i.test(trimmed) ? `v${trimmed.slice(1)}` : `v${trimmed}`;
+}
+
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
@@ -60,6 +72,7 @@ function assert(cond, msg) {
 const repo = process.env.RELEASE_REPO || process.env.GITHUB_REPOSITORY || 'bighard-1/orbitterm-clients';
 const tag = (process.env.RELEASE_TAG || '').trim();
 assert(tag, 'RELEASE_TAG is required');
+const releaseVersion = tag.replace(/^v/i, '');
 
 const releaseDir = path.join('releases', tag);
 ensureDir(releaseDir);
@@ -70,7 +83,7 @@ const searchRoots = [
   { dir: path.join('src-tauri', 'target', 'x86_64-pc-windows-msvc', 'release', 'bundle', 'portable'), exts: ['.zip'] },
 ];
 
-const found = [];
+let found = [];
 for (const root of searchRoots) {
   const files = listFilesIfExists(root.dir, root.exts);
   for (const file of files) {
@@ -83,6 +96,10 @@ for (const root of searchRoots) {
 }
 
 assert(found.length > 0, 'No windows artifact found in msi/nsis/portable output directories.');
+const tagged = found.filter((f) => f.file.includes(`_${releaseVersion}_`));
+if (tagged.length > 0) {
+  found = tagged;
+}
 
 const hashMap = {};
 for (const f of found) {
@@ -115,6 +132,20 @@ for (const f of found) {
   };
 }
 latest.windowsPackages = windowsPackages;
+const platformVersions = {
+  ...(latest.platformVersions && typeof latest.platformVersions === 'object' ? latest.platformVersions : {})
+};
+platformVersions.windows =
+  extractVersionFromArtifactName(primary.file) || normalizeVersionTag(tag) || normalizeVersionTag(latest.version);
+platformVersions.macArm =
+  normalizeVersionTag(platformVersions.macArm) || extractVersionFromArtifactName(latest.macPackage) || '';
+platformVersions.macX64 =
+  normalizeVersionTag(platformVersions.macX64) || extractVersionFromArtifactName(latest.macPackageX64) || '';
+platformVersions.linux =
+  normalizeVersionTag(platformVersions.linux) || extractVersionFromArtifactName(latest.linuxPackage) || '';
+platformVersions.android =
+  normalizeVersionTag(platformVersions.android) || extractVersionFromArtifactName(latest.androidPackage) || '';
+latest.platformVersions = platformVersions;
 
 const json = `${JSON.stringify(latest, null, 2)}\n`;
 fs.writeFileSync(latestPath, json, 'utf8');
