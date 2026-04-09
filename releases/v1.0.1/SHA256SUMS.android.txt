@@ -1,0 +1,3 @@
+85a1d5d9367e684f11f041d944f805b600a86cd9796142781aecbdd3faf42c15  ./OrbitTerm_1.0.1_android-arm64.apk
+85a1d5d9367e684f11f041d944f805b600a86cd9796142781aecbdd3faf42c15  ./OrbitTerm_1.0.1_android-universal.apk
+155f905a001a906e04d3fbf73bcb5ab48f66a67a122790ab56312f002e3f5b78  ./OrbitTerm_1.0.1_android-x86_64.apk
