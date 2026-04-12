@@ -1,70 +1,74 @@
 {
-  "version": "v1.0.1",
-  "date": "2026-04-09",
-  "windowsPackage": "OrbitTerm_1.0.1_x64-setup.exe",
-  "windowsDownloadUrl": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v1.0.1/OrbitTerm_1.0.1_x64-setup.exe",
-  "macPackage": "OrbitTerm_1.0.1_aarch64.dmg",
-  "macPackageX64": "OrbitTerm_1.0.1_x64.dmg",
-  "macSha256": "7bf6654360a8fe754fd61b8fd50cfbb4b5f15d6474b737a7928805f6735f0f23",
-  "macSha256X64": "0573f662268478ea9f16c64245f46fb628d8e72839fb5a9480f574ceee634769",
-  "macDownloadUrl": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v1.0.1/OrbitTerm_1.0.1_aarch64.dmg",
-  "macDownloadUrlX64": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v1.0.1/OrbitTerm_1.0.1_x64.dmg",
+  "version": "v1.0.2",
+  "date": "2026-04-12",
+  "windowsPackage": "OrbitTerm_1.0.2_x64_en-US.msi",
+  "windowsDownloadUrl": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v1.0.2/OrbitTerm_1.0.2_x64_en-US.msi",
+  "macPackage": "OrbitTerm_1.0.2_aarch64.dmg",
+  "macPackageX64": "OrbitTerm_1.0.2_x64.dmg",
+  "macSha256": "674d014bdf8f3583c764132002b536d3e849df8a6d94eecd2496d0bddfc4faab",
+  "macSha256X64": "816d52bdf61a6967a1cabcf042b58078c059784bb79d14bd36b4e64efac13939",
+  "macDownloadUrl": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v1.0.2/OrbitTerm_1.0.2_aarch64.dmg",
+  "macDownloadUrlX64": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v1.0.2/OrbitTerm_1.0.2_x64.dmg",
   "macPackages": {
     "arm64": {
-      "file": "OrbitTerm_1.0.1_aarch64.dmg",
-      "sha256": "7bf6654360a8fe754fd61b8fd50cfbb4b5f15d6474b737a7928805f6735f0f23"
+      "file": "OrbitTerm_1.0.2_aarch64.dmg",
+      "sha256": "674d014bdf8f3583c764132002b536d3e849df8a6d94eecd2496d0bddfc4faab"
     },
     "x64": {
-      "file": "OrbitTerm_1.0.1_x64.dmg",
-      "sha256": "0573f662268478ea9f16c64245f46fb628d8e72839fb5a9480f574ceee634769"
+      "file": "OrbitTerm_1.0.2_x64.dmg",
+      "sha256": "816d52bdf61a6967a1cabcf042b58078c059784bb79d14bd36b4e64efac13939"
     }
   },
-  "linuxPackage": "OrbitTerm_1.0.1_amd64.deb",
-  "linuxSha256": "27b7fa76db6f0f772c74f1dfa3419bfdab8ee5d1dd50437797c8c9417398f743",
-  "linuxDownloadUrl": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v1.0.1/OrbitTerm_1.0.1_amd64.deb",
+  "linuxPackage": "OrbitTerm_1.0.2_amd64.deb",
+  "linuxSha256": "e83423f958780d48f804d9c7862aa299c779c515261bf2f28837885d7aaec696",
+  "linuxDownloadUrl": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v1.0.2/OrbitTerm_1.0.2_amd64.deb",
   "linuxPackages": {
     "deb": {
-      "file": "OrbitTerm_1.0.1_amd64.deb",
-      "sha256": "27b7fa76db6f0f772c74f1dfa3419bfdab8ee5d1dd50437797c8c9417398f743"
+      "file": "OrbitTerm_1.0.2_amd64.deb",
+      "sha256": "e83423f958780d48f804d9c7862aa299c779c515261bf2f28837885d7aaec696"
     },
     "rpm": {
-      "file": "OrbitTerm-1.0.1-1.x86_64.rpm",
-      "sha256": "6f13e944f95bd8b3f2b1280429c8e75bbf08480e8602a10f5102f2f69bc0b29c"
+      "file": "OrbitTerm-1.0.2-1.x86_64.rpm",
+      "sha256": "83242532a145c03e4f96c40083b44ed05e5de166693e14153b6ed655810667d5"
     }
   },
-  "androidPackage": "OrbitTerm_1.0.1_android-universal.apk",
-  "androidSha256": "85a1d5d9367e684f11f041d944f805b600a86cd9796142781aecbdd3faf42c15",
-  "androidSha": "85a1d5d9367e684f11f041d944f805b600a86cd9796142781aecbdd3faf42c15",
-  "androidDownloadUrl": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v1.0.1/OrbitTerm_1.0.1_android-universal.apk",
+  "androidPackage": "OrbitTerm_1.0.2_android-universal.apk",
+  "androidSha256": "9f8901349b5159ba545968e5994766118e3677e0dc8d22c85a383cb0f37d7f40",
+  "androidSha": "9f8901349b5159ba545968e5994766118e3677e0dc8d22c85a383cb0f37d7f40",
+  "androidDownloadUrl": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v1.0.2/OrbitTerm_1.0.2_android-universal.apk",
   "androidPackages": {
     "apk": {
-      "file": "OrbitTerm_1.0.1_android-universal.apk",
-      "sha256": "85a1d5d9367e684f11f041d944f805b600a86cd9796142781aecbdd3faf42c15"
+      "file": "OrbitTerm_1.0.2_android-universal.apk",
+      "sha256": "9f8901349b5159ba545968e5994766118e3677e0dc8d22c85a383cb0f37d7f40"
     },
     "arm64": {
-      "file": "OrbitTerm_1.0.1_android-arm64.apk",
-      "sha256": "85a1d5d9367e684f11f041d944f805b600a86cd9796142781aecbdd3faf42c15"
+      "file": "OrbitTerm_1.0.2_android-arm64.apk",
+      "sha256": "9f8901349b5159ba545968e5994766118e3677e0dc8d22c85a383cb0f37d7f40"
     },
     "x86_64": {
-      "file": "OrbitTerm_1.0.1_android-x86_64.apk",
-      "sha256": "155f905a001a906e04d3fbf73bcb5ab48f66a67a122790ab56312f002e3f5b78"
+      "file": "OrbitTerm_1.0.2_android-x86_64.apk",
+      "sha256": "37606d171383d7e2b2151192cc94b811144f59cd39e1ae2db540276d7955acf6"
     }
   },
-  "windowsSha256": "0eaa2138af9e7ea6673becffa4ba4dc497b93c5bc845b6a01856d49ba41a40a8",
-  "macSha": "7bf6654360a8fe754fd61b8fd50cfbb4b5f15d6474b737a7928805f6735f0f23",
-  "macShaX64": "0573f662268478ea9f16c64245f46fb628d8e72839fb5a9480f574ceee634769",
-  "linuxSha": "27b7fa76db6f0f772c74f1dfa3419bfdab8ee5d1dd50437797c8c9417398f743",
+  "windowsSha256": "56726efd147e5a8d70903093666144c85059fac1385184a3c65346242346a664",
+  "macSha": "674d014bdf8f3583c764132002b536d3e849df8a6d94eecd2496d0bddfc4faab",
+  "macShaX64": "816d52bdf61a6967a1cabcf042b58078c059784bb79d14bd36b4e64efac13939",
+  "linuxSha": "e83423f958780d48f804d9c7862aa299c779c515261bf2f28837885d7aaec696",
   "windowsPackages": {
+    "msi": {
+      "file": "OrbitTerm_1.0.2_x64_en-US.msi",
+      "sha256": "56726efd147e5a8d70903093666144c85059fac1385184a3c65346242346a664"
+    },
     "nsis": {
-      "file": "OrbitTerm_1.0.1_x64-setup.exe",
-      "sha256": "0eaa2138af9e7ea6673becffa4ba4dc497b93c5bc845b6a01856d49ba41a40a8"
+      "file": "OrbitTerm_1.0.2_x64-setup.exe",
+      "sha256": "3ff19d776cafbfb1d76051942d1e2898ca6d7b9ad2a35a019e84f3c252ae9559"
     }
   },
   "platformVersions": {
-    "windows": "v1.0.1",
-    "macArm": "v1.0.1",
-    "macX64": "v1.0.1",
-    "linux": "v1.0.1",
-    "android": "v1.0.1"
+    "windows": "v1.0.2",
+    "macArm": "v1.0.2",
+    "macX64": "v1.0.2",
+    "linux": "v1.0.2",
+    "android": "v1.0.2"
   }
 }
