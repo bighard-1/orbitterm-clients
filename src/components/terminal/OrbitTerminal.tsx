@@ -872,7 +872,7 @@ function TerminalInstance({
       )}
       <div className="min-h-0 flex-1">
         <div
-          className="orbitterm-xterm-host h-full min-h-[120px] w-full rounded-xl p-2"
+          className="orbitterm-xterm-host h-full min-h-[120px] w-full rounded-xl"
           onContextMenu={(event) => {
             event.preventDefault();
             onFocusPane(pane.id);

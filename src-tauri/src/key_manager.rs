@@ -174,7 +174,8 @@ pub async fn export_private_key(
 }
 
 fn parse_private_key(raw: &str) -> Result<PrivateKey, KeyManagerError> {
-    let trimmed = raw.trim();
+    let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+    let trimmed = normalized.trim().trim_start_matches('\u{feff}');
     if trimmed.is_empty() {
         return Err(KeyManagerError::InvalidInput("私钥不能为空。".to_string()));
     }

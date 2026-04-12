@@ -1,4 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod';
+import { useEffect, useState, type ChangeEvent } from 'react';
 import { useForm } from 'react-hook-form';
 import { step2Schema, type Step2FormValues } from '../../schemas/hostSchemas';
 import { useHostStore } from '../../store/useHostStore';
@@ -6,6 +7,10 @@ import { Tooltip } from './Tooltip';
 
 const inputClassName =
   'w-full rounded-xl border border-white/65 bg-white/70 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-frost-accent/60 focus:ring-2 focus:ring-frost-accent/20';
+
+const normalizePrivateKeyContent = (content: string): string => {
+  return content.replace(/\u0000/g, '').replace(/\r\n?/g, '\n').replace(/^\uFEFF/, '').trim();
+};
 
 export function Step2(): JSX.Element {
   const basicInfo = useHostStore((state) => state.basicInfo);
@@ -18,6 +23,7 @@ export function Step2(): JSX.Element {
   const {
     register,
     handleSubmit,
+    setValue,
     watch,
     formState: { errors }
   } = useForm<Step2FormValues>({
@@ -29,6 +35,34 @@ export function Step2(): JSX.Element {
   const method = watch('method');
   const protocol = basicInfo.protocol ?? 'ssh';
   const selectedIdentity = identities.find((identity) => identity.id === basicInfo.identityId);
+  const [keyUploadHint, setKeyUploadHint] = useState<string>('');
+
+  useEffect(() => {
+    if (method !== 'privateKey') {
+      setKeyUploadHint('');
+    }
+  }, [method]);
+
+  const handlePrivateKeyFileUpload = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    try {
+      const content = await file.text();
+      const normalized = normalizePrivateKeyContent(content);
+      setValue('privateKey', normalized, {
+        shouldDirty: true,
+        shouldValidate: true,
+        shouldTouch: true
+      });
+      setKeyUploadHint(`已导入私钥文件：${file.name}`);
+    } catch (_error) {
+      setKeyUploadHint('读取私钥文件失败，请重试或直接粘贴私钥内容。');
+    } finally {
+      event.target.value = '';
+    }
+  };
 
   if (basicInfo.identityMode === 'existing') {
     return (
@@ -138,6 +172,22 @@ export function Step2(): JSX.Element {
 
       {protocol === 'ssh' && method === 'privateKey' && (
         <div className="space-y-5">
+          <div className="space-y-2 rounded-2xl border border-white/65 bg-white/65 p-3">
+            <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+              上传私钥文件
+              <Tooltip content="支持上传 .pem / .key / .ppk / .txt，导入后会自动填入下方私钥内容输入框。" />
+            </label>
+            <input
+              accept=".pem,.key,.ppk,.txt,application/x-pem-file,text/plain"
+              className="block w-full text-xs text-slate-700 file:mr-3 file:rounded-lg file:border file:border-white/70 file:bg-white/80 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-white"
+              onChange={(event) => {
+                void handlePrivateKeyFileUpload(event);
+              }}
+              type="file"
+            />
+            {keyUploadHint && <p className="text-xs text-slate-600">{keyUploadHint}</p>}
+          </div>
+
           <div className="space-y-2">
             <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
               私钥内容

@@ -27,7 +27,6 @@ import {
   type TerminalSplitPane
 } from './components/terminal/OrbitTerminal';
 import type { MetricTrendPoint } from './components/terminal/MetricTrendChart';
-import { OrbitAiAssistant } from './components/terminal/OrbitAiAssistant';
 import { OrbitInspector } from './components/terminal/OrbitInspector';
 import { SnippetsPanel } from './components/terminal/SnippetsPanel';
 import { SftpManager } from './components/sftp/SftpManager';
@@ -41,7 +40,6 @@ import { useHostStore } from './store/useHostStore';
 import { useUiSettingsStore, type CloseWindowAction } from './store/useUiSettingsStore';
 import { useTransferStore } from './store/useTransferStore';
 import { useAppLogStore } from './store/useAppLogStore';
-import { aiExplainSshError } from './services/ai';
 import type { HealthCheckResponse, SshDiagnosticLogEvent } from './services/inspector';
 import { runHealthCheck } from './services/inspector';
 import {
@@ -125,6 +123,11 @@ interface TerminalPerfSummary {
   sysStatusEvents: number;
   sysUiFlushes: number;
   updatedAt: number;
+}
+
+interface HostDeleteConfirmState {
+  hostId: string;
+  hostName: string;
 }
 
 const toolbarButtonClass =
@@ -1062,7 +1065,6 @@ const PALETTE_SETTINGS_ENTRIES: ReadonlyArray<PaletteSettingEntry> = [
 
 function App(): JSX.Element {
   const { locale, t } = useI18n();
-  const [isAiAssistantOpen, setIsAiAssistantOpen] = useState<boolean>(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState<boolean>(false);
   const [commandPaletteQuery, setCommandPaletteQuery] = useState<string>('');
   const [commandPaletteActiveIndex, setCommandPaletteActiveIndex] = useState<number>(0);
@@ -1086,6 +1088,7 @@ function App(): JSX.Element {
   const [selectedTabHostId, setSelectedTabHostId] = useState<string>('');
   const [releaseNotice, setReleaseNotice] = useState<ReleaseNoticeState>(() => readReleaseNoticeState());
   const [editingHostId, setEditingHostId] = useState<string | null>(null);
+  const [hostDeleteConfirm, setHostDeleteConfirm] = useState<HostDeleteConfirmState | null>(null);
   const [isSyncPopoverOpen, setIsSyncPopoverOpen] = useState<boolean>(false);
   const [isSyncingPath, setIsSyncingPath] = useState<boolean>(false);
   const [sftpSyncRequest, setSftpSyncRequest] = useState<SftpSyncRequest | null>(null);
@@ -2315,15 +2318,6 @@ function App(): JSX.Element {
         }
       },
       {
-        id: 'action:ai',
-        title: '打开灵思助手',
-        subtitle: '呼出 AI 命令助手面板',
-        keywords: ['ai', '助手', '灵思', '命令生成'],
-        execute: () => {
-          setIsAiAssistantOpen(true);
-        }
-      },
-      {
         id: 'action:about',
         title: '关于 OrbitTerm',
         subtitle: '查看版本信息与下载提示',
@@ -2547,10 +2541,6 @@ function App(): JSX.Element {
       const key = event.key.toLowerCase();
       if (key === 'k') {
         event.preventDefault();
-        if (event.shiftKey) {
-          setIsAiAssistantOpen((prev) => !prev);
-          return;
-        }
         setIsCommandPaletteOpen((prev) => {
           const next = !prev;
           if (next) {
@@ -3676,10 +3666,6 @@ function App(): JSX.Element {
     [activeTerminalSessionId, setTerminalError]
   );
 
-  const fillCommandIntoTerminal = async (command: string): Promise<void> => {
-    await sendCommandToTerminal(command, false);
-  };
-
   const runSnippetInTerminal = async (command: string, autoEnter: boolean): Promise<void> => {
     if (!autoEnter) {
       setTerminalDraftCommand((prev) => {
@@ -4232,23 +4218,17 @@ function App(): JSX.Element {
     toast.error(`自动重连失败：${closedSession.title}`);
   };
 
-  const handleAskAiForSshFix = async (errorMessage: string, logContext: string[]) => {
-    return aiExplainSshError(errorMessage, logContext);
+  const handleDeleteHost = async (hostId: string, hostName: string): Promise<void> => {
+    setHostDeleteConfirm({ hostId, hostName });
   };
 
-  const handleDeleteHost = async (hostId: string, hostName: string): Promise<void> => {
-    if (!requestDangerousActionConfirm(`delete-host:${hostId}`, '删除主机')) {
+  const handleConfirmDeleteHost = async (): Promise<void> => {
+    if (!hostDeleteConfirm) {
       return;
     }
-    const shouldDelete = isMobileRuntime
-      ? true
-      : window.confirm(`确认删除主机「${hostName}」吗？该操作会同步更新本地金库。`);
-    if (!shouldDelete) {
-      return;
-    }
-
     try {
-      await deleteHost(hostId);
+      await deleteHost(hostDeleteConfirm.hostId);
+      setHostDeleteConfirm(null);
       void triggerMobileHaptic('success');
     } catch (error) {
       const fallback = '删除主机失败，请稍后重试。';
@@ -4364,6 +4344,10 @@ function App(): JSX.Element {
         recordHostConnection(hostId);
         setTerminalError(null);
         void triggerMobileHaptic('success');
+      } else {
+        const message =
+          useHostStore.getState().terminalError || '连接失败：请检查主机地址、用户名与私钥/口令配置。';
+        toast.error(message);
       }
     } finally {
       setConnectingHostId((current) => (current === hostId ? null : current));
@@ -4629,6 +4613,10 @@ function App(): JSX.Element {
       recordHostConnection(buildHostKey(selectedTabHost));
       setTerminalError(null);
       setIsNewTabModalOpen(false);
+    } else {
+      const message =
+        useHostStore.getState().terminalError || '连接失败：请检查主机地址、用户名与私钥/口令配置。';
+      toast.error(message);
     }
   };
 
@@ -5004,7 +4992,12 @@ function App(): JSX.Element {
     };
   }, [uiScalePercent]);
   const mobileBottomNavReservePx =
-    isMobileRuntime && appView === 'dashboard' && !isMobileTerminalFocusMode ? 84 : 0;
+    isMobileRuntime &&
+    appView === 'dashboard' &&
+    !isMobileTerminalFocusMode &&
+    dashboardSection !== 'hosts'
+      ? 84
+      : 0;
   const appShellStyle = useMemo(() => {
     return {
       ...(appScaleStyle ?? {}),
@@ -5014,7 +5007,7 @@ function App(): JSX.Element {
           ? `calc(env(safe-area-inset-bottom) + ${Math.max(0, mobileKeyboardInset)}px + ${mobileBottomNavReservePx}px)`
           : undefined
     };
-  }, [appScaleStyle, isMobileRuntime, mobileKeyboardInset, mobileBottomNavReservePx]);
+  }, [appScaleStyle, dashboardSection, isMobileRuntime, mobileKeyboardInset, mobileBottomNavReservePx]);
   const shellContainerStyle = useMemo(
     () => ({
       borderColor: toRgba(activeUiPalette.panelBorder, isMobileRuntime ? 1 : 0.45),
@@ -5567,7 +5560,9 @@ function App(): JSX.Element {
             isMobileRuntime
               ? isMobileTerminalFocusMode
                 ? 'px-1 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-0'
-                : 'px-1 pb-[calc(5.8rem+env(safe-area-inset-bottom))] pt-1'
+                : dashboardSection === 'hosts'
+                  ? 'px-1 pb-[calc(4.65rem+env(safe-area-inset-bottom))] pt-1'
+                  : 'px-1 pb-[calc(5.8rem+env(safe-area-inset-bottom))] pt-1'
               : 'p-0'
           }`}
         >
@@ -5653,7 +5648,7 @@ function App(): JSX.Element {
                 </div>
               </aside>
 
-              <div className="min-w-0 flex-1">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="text-sm font-semibold" style={{ color: activeUiPalette.textPrimary }}>
                     {uiText.hostTitle}
@@ -5752,8 +5747,8 @@ function App(): JSX.Element {
                   </div>
                 )}
 
-                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                  <div className={`relative flex-1 ${isMobileRuntime ? 'min-w-0' : 'min-w-[240px]'}`}>
+                <div className={`mt-2.5 ${isMobileRuntime ? 'grid grid-cols-1 gap-1.5' : 'flex flex-wrap items-center gap-1.5'}`}>
+                  <div className={`relative ${isMobileRuntime ? 'w-full min-w-0' : 'min-w-[240px] flex-1'}`}>
                     <span
                       className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px]"
                       style={{ color: activeUiPalette.textMuted }}
@@ -5789,8 +5784,9 @@ function App(): JSX.Element {
                       </span>
                     )}
                   </div>
+                  <div className={`flex flex-wrap items-center gap-1.5 ${isMobileRuntime ? 'w-full' : ''}`}>
                   <select
-                    className="rounded-[var(--radius)] border px-2 py-1.5 text-[11px] outline-none"
+                    className="min-w-[8.75rem] rounded-[var(--radius)] border px-2 py-1.5 text-[11px] outline-none"
                     onChange={(event) => {
                       setActiveGroupFilter(event.target.value);
                       setHighlightedSearchIndex(0);
@@ -5851,6 +5847,7 @@ function App(): JSX.Element {
                             : `主机上限 ${hosts.length}/${licensedHostLimit}`}
                     </span>
                   )}
+                  </div>
                 </div>
 
                 {!isMobileRuntime && (
@@ -5932,7 +5929,7 @@ function App(): JSX.Element {
 
                 <div
                   aria-busy={isHostListBootstrapping}
-                  className={`mt-2.5 min-h-0 ${isMobileRuntime ? 'h-[calc(100%-102px)]' : 'h-[calc(100%-118px)]'} space-y-1.5 overflow-y-auto overflow-x-hidden pr-1`}
+                  className="mt-2.5 min-h-0 flex-1 space-y-1.5 overflow-y-auto overflow-x-hidden pr-1"
                   onTouchEnd={handleHostListTouchEnd}
                   onTouchMove={handleHostListTouchMove}
                   onTouchStart={handleHostListTouchStart}
@@ -6870,7 +6867,13 @@ function App(): JSX.Element {
                       }}
                       type="button"
                     >
-                      {t('inspector.askAi')}
+                      {locale === 'en-US'
+                        ? 'Open Diagnostics'
+                        : locale === 'ja-JP'
+                          ? '診断を開く'
+                          : locale === 'zh-TW'
+                            ? '開啟診斷'
+                            : '打开诊断'}
                     </button>
                   </div>
                 )}
@@ -7873,20 +7876,10 @@ function App(): JSX.Element {
         query={commandPaletteQuery}
       />
 
-      <OrbitAiAssistant
-        onClose={() => {
-          setIsAiAssistantOpen(false);
-        }}
-        onFill={fillCommandIntoTerminal}
-        open={isAiAssistantOpen}
-        sessionId={activeTerminalSessionId}
-      />
-
       <OrbitInspector
         appLogs={appLogs}
         healthReport={healthReport}
         logs={sshDiagnosticLogs}
-        onAskAi={handleAskAiForSshFix}
         onClearAppLogs={clearAppLogs}
         onClose={() => {
           setIsInspectorOpen(false);
@@ -7897,7 +7890,6 @@ function App(): JSX.Element {
         open={isInspectorOpen}
         perfSummary={terminalPerfSummary}
         sessionId={activeTerminalSessionId}
-        terminalError={terminalError}
       />
 
       <SettingsDrawer
@@ -7963,6 +7955,40 @@ function App(): JSX.Element {
         }}
         open={isCloudAuthModalOpen}
       />
+
+      {hostDeleteConfirm && (
+        <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-white/45 bg-[#f1f7ff]/95 p-5 shadow-2xl backdrop-blur-2xl">
+            <h3 className="text-base font-semibold text-slate-900">确认删除主机</h3>
+            <p className="mt-2 text-sm text-slate-700">
+              你正在删除主机「{hostDeleteConfirm.hostName || '未命名主机'}」。删除后会同步更新本地金库与会话配置。
+            </p>
+            <p className="mt-2 text-xs text-rose-600">该操作不可撤销，请确认后继续。</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                disabled={isSavingVault}
+                onClick={() => {
+                  setHostDeleteConfirm(null);
+                }}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-70"
+                disabled={isSavingVault}
+                onClick={() => {
+                  void handleConfirmDeleteHost();
+                }}
+                type="button"
+              >
+                {isSavingVault ? '删除中...' : '确认删除'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isCloseWindowPromptOpen && (
         <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">

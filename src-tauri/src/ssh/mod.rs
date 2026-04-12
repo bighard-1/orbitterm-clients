@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use russh::client;
-use russh::keys::{decode_openssh, PrivateKeyWithHashAlg};
+use russh::keys::{decode_secret_key, PrivateKeyWithHashAlg};
 use russh::{ChannelMsg, Disconnect};
 use russh_sftp::client::{error::Error as SftpError, SftpSession};
 use russh_sftp::protocol::{FileType, OpenFlags, StatusCode};
@@ -2550,12 +2550,23 @@ async fn authenticate_identity(
                 .private_key
                 .as_deref()
                 .ok_or(SshBackendError::InvalidInput)?;
+            let normalized_key_text = key_text.replace("\r\n", "\n").replace('\r', "\n");
+            let normalized_key = normalized_key_text.trim().trim_start_matches('\u{feff}');
+            if normalized_key.is_empty() {
+                return Err(SshBackendError::InvalidInput);
+            }
+            let passphrase = identity
+                .auth_config
+                .passphrase
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
 
-            let private_key = decode_openssh(
-                key_text.as_bytes(),
-                identity.auth_config.passphrase.as_deref(),
-            )
-            .map_err(|_| SshBackendError::AuthFailure)?;
+            let private_key = decode_secret_key(normalized_key, passphrase).map_err(|err| {
+                SshBackendError::Protocol(format!(
+                    "私钥解析失败，请确认密钥格式（支持 OpenSSH/PKCS#8/PKCS#1/PPK）与口令是否正确: {err}"
+                ))
+            })?;
 
             let key = PrivateKeyWithHashAlg::new(Arc::new(private_key), None);
 

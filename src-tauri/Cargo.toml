@@ -1,6 +1,6 @@
 [package]
 name = "orbitterm-backend"
-version = "1.0.0"
+version = "1.0.2"
 description = "OrbitTerm Tauri backend with async SSH"
 authors = ["OrbitTerm Team"]
 license = "MIT"

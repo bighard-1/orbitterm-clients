@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react';
-import type { AiExplainSshErrorResponse } from '../../services/ai';
 import type { HealthCheckResponse, SshDiagnosticLogEvent } from '../../services/inspector';
 import type { AppLogEntry } from '../../store/useAppLogStore';
 import { useI18n } from '../../i18n/useI18n';
@@ -9,7 +8,6 @@ interface OrbitInspectorProps {
   sessionId: string | null;
   logs: SshDiagnosticLogEvent[];
   appLogs: AppLogEntry[];
-  terminalError: string | null;
   healthReport: HealthCheckResponse | null;
   perfSummary: {
     inputChunks: number;
@@ -21,7 +19,6 @@ interface OrbitInspectorProps {
     updatedAt: number;
   };
   onClose: () => void;
-  onAskAi: (errorMessage: string, logContext: string[]) => Promise<AiExplainSshErrorResponse>;
   onRefreshHealth: () => Promise<void>;
   onClearAppLogs: () => void;
 }
@@ -77,18 +74,13 @@ export function OrbitInspector({
   sessionId,
   logs,
   appLogs,
-  terminalError,
   healthReport,
   perfSummary,
   onClose,
-  onAskAi,
   onRefreshHealth,
   onClearAppLogs
 }: OrbitInspectorProps): JSX.Element | null {
   const { t, locale } = useI18n();
-  const [aiAdvice, setAiAdvice] = useState<AiExplainSshErrorResponse | null>(null);
-  const [aiLoading, setAiLoading] = useState<boolean>(false);
-  const [aiError, setAiError] = useState<string | null>(null);
   const [activeLogTab, setActiveLogTab] = useState<'conn' | 'global'>('conn');
   const [connScrollTop, setConnScrollTop] = useState<number>(0);
   const [globalScrollTop, setGlobalScrollTop] = useState<number>(0);
@@ -135,27 +127,6 @@ export function OrbitInspector({
   if (!open) {
     return null;
   }
-
-  const handleAskAi = async (): Promise<void> => {
-    if (!terminalError) {
-      return;
-    }
-
-    setAiLoading(true);
-    setAiError(null);
-    try {
-      const contextLines = visibleLogs.slice(-80).map((item) => {
-        return `[${item.level}] [${item.stage}] ${item.message}`;
-      });
-      const response = await onAskAi(terminalError, contextLines);
-      setAiAdvice(response);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : t('inspector.aiUnavailable');
-      setAiError(message);
-    } finally {
-      setAiLoading(false);
-    }
-  };
 
   return (
     <div className="fixed inset-0 z-[125] flex items-center justify-center bg-[#02050a]/45 p-4 backdrop-blur-sm">
@@ -234,43 +205,6 @@ export function OrbitInspector({
               </div>
             ) : (
               <p className="text-xs text-[#8ea4c7]">{t('inspector.noHealthReport')}</p>
-            )}
-          </section>
-
-          <section className="rounded-xl border border-[#274267] bg-[#0a172c] p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea4c7]">
-                {t('inspector.section.ai')}
-              </h3>
-              <button
-                className="rounded-md border border-[#34527a] bg-[#12233d] px-2 py-1 text-[11px] text-[#d7e5ff] hover:bg-[#183258] disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!terminalError || aiLoading}
-                onClick={() => {
-                  void handleAskAi();
-                }}
-                type="button"
-              >
-                {aiLoading ? t('inspector.askingAi') : t('inspector.askAi')}
-              </button>
-            </div>
-            {terminalError ? (
-              <p className="rounded-md bg-rose-500/10 px-2 py-1.5 text-[11px] text-rose-200">
-                {t('inspector.currentError', { error: terminalError })}
-              </p>
-            ) : (
-              <p className="text-xs text-[#8ea4c7]">{t('inspector.noSshError')}</p>
-            )}
-            {aiError && <p className="mt-2 text-[11px] text-rose-300">{aiError}</p>}
-            {aiAdvice && (
-              <div className="mt-2 space-y-2 rounded-lg border border-[#1f3658] bg-[#0b1b31] p-2">
-                <p className="text-[11px] text-[#95abcc]">Provider: {aiAdvice.provider}</p>
-                <pre className="whitespace-pre-wrap break-words rounded bg-[#050d1b] p-2 text-[11px] leading-5 text-[#dce8ff]">
-                  {aiAdvice.advice}
-                </pre>
-                <p className="rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
-                  {aiAdvice.riskNotice}
-                </p>
-              </div>
             )}
           </section>
 

@@ -128,10 +128,6 @@ textarea:focus-visible,
     monospace;
 }
 
-.orbitterm-xterm-host .xterm .xterm-screen {
-  padding: 16px 14px 14px 16px;
-}
-
 .orbitterm-xterm-host .xterm .xterm-cursor {
   transition: opacity 180ms ease-in-out;
 }
@@ -168,10 +164,6 @@ textarea:focus-visible,
   .orbitterm-xterm-host .xterm .xterm-viewport {
     scrollbar-gutter: auto;
     padding-right: 2px;
-  }
-
-  .orbitterm-xterm-host .xterm .xterm-screen {
-    padding: 12px 10px 10px 12px;
   }
 
   .orbitterm-xterm-host .xterm .xterm-viewport::-webkit-scrollbar {

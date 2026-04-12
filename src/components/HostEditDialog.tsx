@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useEffect } from 'react';
+import { useEffect, useState, type ChangeEvent } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import type { HostConfig, IdentityConfig } from '../types/host';
@@ -95,6 +95,10 @@ interface HostEditDialogProps {
 const inputClassName =
   'w-full rounded-xl border border-white/65 bg-white/70 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-frost-accent/60 focus:ring-2 focus:ring-frost-accent/20';
 
+const normalizePrivateKeyContent = (content: string): string => {
+  return content.replace(/\u0000/g, '').replace(/\r\n?/g, '\n').replace(/^\uFEFF/, '').trim();
+};
+
 export function HostEditDialog({
   open,
   host,
@@ -108,6 +112,7 @@ export function HostEditDialog({
     register,
     handleSubmit,
     reset,
+    setValue,
     watch,
     formState: { errors }
   } = useForm<HostEditFormValues>({
@@ -136,6 +141,7 @@ export function HostEditDialog({
     if (!open || !host || !identity) {
       return;
     }
+    setKeyUploadHint('');
 
     reset({
       name: host.basicInfo.name,
@@ -159,6 +165,34 @@ export function HostEditDialog({
   const method = watch('method');
   const protocol = watch('protocol');
   const isMobileRuntime = detectMobileFormFactor() || isAndroidRuntime();
+  const [keyUploadHint, setKeyUploadHint] = useState<string>('');
+
+  useEffect(() => {
+    if (protocol !== 'ssh' || method !== 'privateKey') {
+      setKeyUploadHint('');
+    }
+  }, [method, protocol]);
+
+  const handlePrivateKeyFileUpload = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    try {
+      const content = await file.text();
+      const normalized = normalizePrivateKeyContent(content);
+      setValue('privateKey', normalized, {
+        shouldDirty: true,
+        shouldValidate: true,
+        shouldTouch: true
+      });
+      setKeyUploadHint(`已导入私钥文件：${file.name}`);
+    } catch (_error) {
+      setKeyUploadHint('读取私钥文件失败，请重试或直接粘贴私钥内容。');
+    } finally {
+      event.target.value = '';
+    }
+  };
 
   if (!open || !host || !identity) {
     return null;
@@ -166,7 +200,7 @@ export function HostEditDialog({
 
   return (
     <div className="fixed inset-0 z-[135] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-3xl rounded-3xl border border-white/30 bg-[#0a1321]/88 p-6 text-slate-100 shadow-2xl backdrop-blur-2xl sm:p-7">
+      <div className="flex max-h-[min(92vh,860px)] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-white/30 bg-[#0a1321]/88 p-6 text-slate-100 shadow-2xl backdrop-blur-2xl sm:p-7">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#8fb2e6]">Host Manager</p>
@@ -186,7 +220,7 @@ export function HostEditDialog({
         </div>
 
         <form
-          className="mt-5 space-y-5"
+          className="mt-5 min-h-0 flex-1 space-y-5 overflow-y-auto pr-1"
           onSubmit={handleSubmit((values) => {
             if (values.protocol === 'serial') {
               values.method = 'none';
@@ -321,6 +355,21 @@ export function HostEditDialog({
 
             {protocol === 'ssh' && method === 'privateKey' && (
               <div className="space-y-4">
+                <div className="space-y-2 rounded-xl border border-[#35547d] bg-[#12233a] p-3">
+                  <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">
+                    上传私钥文件
+                  </label>
+                  <input
+                    accept=".pem,.key,.ppk,.txt,application/x-pem-file,text/plain"
+                    className="block w-full text-xs text-[#d4e5ff] file:mr-3 file:rounded-lg file:border file:border-[#35547d] file:bg-[#0f1f34] file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-[#d4e5ff] hover:file:bg-[#173051]"
+                    onChange={(event) => {
+                      void handlePrivateKeyFileUpload(event);
+                    }}
+                    type="file"
+                  />
+                  {keyUploadHint && <p className="text-xs text-[#9ab2d6]">{keyUploadHint}</p>}
+                </div>
+
                 <div className="space-y-2">
                   <label className="text-xs font-semibold uppercase tracking-[0.14em] text-[#95b0d8]">私钥内容</label>
                   <textarea
