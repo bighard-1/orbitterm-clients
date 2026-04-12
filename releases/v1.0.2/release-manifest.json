@@ -1,8 +1,8 @@
 {
   "version": "v1.0.2",
   "date": "2026-04-12",
-  "windowsPackage": "OrbitTerm_1.0.2_x64_en-US.msi",
-  "windowsDownloadUrl": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v1.0.2/OrbitTerm_1.0.2_x64_en-US.msi",
+  "windowsPackage": "OrbitTerm_1.0.2_x64-setup.exe",
+  "windowsDownloadUrl": "https://raw.githubusercontent.com/bighard-1/orbitterm-clients/main/releases/v1.0.2/OrbitTerm_1.0.2_x64-setup.exe",
   "macPackage": "OrbitTerm_1.0.2_aarch64.dmg",
   "macPackageX64": "OrbitTerm_1.0.2_x64.dmg",
   "macSha256": "674d014bdf8f3583c764132002b536d3e849df8a6d94eecd2496d0bddfc4faab",
@@ -50,18 +50,14 @@
       "sha256": "37606d171383d7e2b2151192cc94b811144f59cd39e1ae2db540276d7955acf6"
     }
   },
-  "windowsSha256": "56726efd147e5a8d70903093666144c85059fac1385184a3c65346242346a664",
+  "windowsSha256": "e707ea91554b4e0c37784d9af06ac41e9fc76a56d48b79fe277f565bf54f88cd",
   "macSha": "674d014bdf8f3583c764132002b536d3e849df8a6d94eecd2496d0bddfc4faab",
   "macShaX64": "816d52bdf61a6967a1cabcf042b58078c059784bb79d14bd36b4e64efac13939",
   "linuxSha": "e83423f958780d48f804d9c7862aa299c779c515261bf2f28837885d7aaec696",
   "windowsPackages": {
-    "msi": {
-      "file": "OrbitTerm_1.0.2_x64_en-US.msi",
-      "sha256": "56726efd147e5a8d70903093666144c85059fac1385184a3c65346242346a664"
-    },
     "nsis": {
       "file": "OrbitTerm_1.0.2_x64-setup.exe",
-      "sha256": "3ff19d776cafbfb1d76051942d1e2898ca6d7b9ad2a35a019e84f3c252ae9559"
+      "sha256": "e707ea91554b4e0c37784d9af06ac41e9fc76a56d48b79fe277f565bf54f88cd"
     }
   },
   "platformVersions": {
